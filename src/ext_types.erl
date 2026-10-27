@@ -1,6 +1,6 @@
 %% Inline head annotations and specification generation, without preprocessing.
 -module(ext_types).
--export([rewrite/1, functions/1, format_error/1]).
+-export([rewrite/1, functions/1, annotation/2, format_error/1]).
 
 rewrite(Document) ->
     try
@@ -20,7 +20,7 @@ functions(Document, OnlyAnnotated) ->
                 Clauses = [clause(C) || C <- ext_syntax:clauses(Bare)],
                 [First | _] = Clauses,
                 Arity = length(maps:get(args, First)),
-                lists:foreach(fun(C) ->
+            lists:foreach(fun(C) ->
                     case {maps:get(name, C), length(maps:get(args, C))} of
                         {Name, Arity} -> ok;
                         _ -> ext_syntax:error(hd(maps:get(entries, C)), inconsistent_clauses)
@@ -84,12 +84,15 @@ explicit_specs(Forms) ->
         case Form of
             [{_, {'-', _}}, {_, {atom, _, spec}} | _] ->
                 case erl_parse:parse_form([T || {_, T} <- Form]) of
-                    {ok, {attribute, Anno, spec, {Key, _}}} -> {true, {Key, erl_anno:location(Anno)}};
+                    {ok, {attribute, Anno, spec, {Key, _}}} -> {true, {spec_key(Key), erl_anno:location(Anno)}};
                     _ -> false
                 end;
             _ -> false
         end
     end, Forms).
+
+spec_key({_Module, Name, Arity}) -> {Name, Arity};
+spec_key(Key) -> Key.
 
 rewrite_function(#{key := Key, clauses := Clauses, start := Start}, Explicit, {Edits, Warnings}) ->
     Annotations = lists:append([annotations(C) || C <- Clauses]),
@@ -100,6 +103,16 @@ rewrite_function(#{key := Key, clauses := Clauses, start := Start}, Explicit, {E
                 {Key, Location} -> ext_syntax:error(hd(maps:get(remove, First)), {spec_conflict, Key, Location});
                 false -> ok
             end,
+            lists:foreach(fun(C) ->
+                lists:foreach(fun(Arg) ->
+                    lists:foreach(fun({_, T} = Entry) ->
+                        case erl_scan:category(T) of
+                            '?' -> ext_syntax:error(Entry, macro_argument);
+                            _ -> ok
+                        end
+                    end, maps:get(pattern, Arg))
+                end, maps:get(args, C))
+            end, Clauses),
             Clean = lists:foldl(fun(A, Acc) -> ext_syntax:remove(maps:get(remove, A), Acc) end, Edits, Annotations),
             HasTypes = lists:any(fun(A) -> not is_any(A) end, Annotations),
             case HasTypes of
@@ -136,6 +149,7 @@ format_error({spec_conflict, {Name, Arity}, Location}) ->
     io_lib:format("inline annotations for ~tp/~B conflict with explicit -spec at ~p; remove one", [Name, Arity, Location]);
 format_error({partial_overload, {Name, Arity}}) ->
     io_lib:format("~tp/~B has a partially annotated overload; any() fallbacks may overlap; use an explicit spec for precise contracts", [Name, Arity]);
+format_error(macro_argument) -> "macro-expanded argument patterns cannot determine a generated spec arity; use an explicit spec";
 format_error(unsupported_pattern) -> "only simple variable patterns may carry inline argument annotations";
 format_error(invalid_type) -> "invalid or unsupported Erlang type annotation (macros are not expanded)";
 format_error(empty_type) -> "expected a type after ::";

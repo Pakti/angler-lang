@@ -101,5 +101,5 @@ help() -> output(
     "       angler --help | --version\n\n"
     "transpile writes one source file to stdout; snippet reads expressions from stdin.\n"
     "UTF-8 is the default. Diagnostics go to stderr; failures produce no source output.\n"
-    "Snippet annotations and record shorthand await the types and records milestones.\n"
+    "Inline function types and explicitly annotated record shorthand are supported.\n"
     "Build mirroring and Eqwalizer are not implemented yet.\n").

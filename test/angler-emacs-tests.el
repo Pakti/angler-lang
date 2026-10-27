@@ -25,9 +25,20 @@
         (kill-ring '("before")))
     (unwind-protect
         (with-temp-buffer
-          (insert "P :: #person{} = get_person(), P.name.")
+          (insert "P.name.")
           (should-error (angler-copy-snippet (point-min) (point-max)) :type 'user-error)
           (should (equal kill-ring '("before")))
-          (should (string-match-p "syntax error" (with-current-buffer "*Angler diagnostics*"
+          (should (string-match-p "explicit record annotation" (with-current-buffer "*Angler diagnostics*"
                                                   (buffer-string)))))
       (when (get-buffer "*Angler diagnostics*") (kill-buffer "*Angler diagnostics*")))))
+
+(ert-deftest angler-copy-record-snippet ()
+  (let ((angler-program (expand-file-name "bin/angler"))
+        (kill-ring nil))
+    (with-temp-buffer
+      (insert "P :: #person{} = get_person(), P.name.")
+      (let ((original (buffer-string)))
+        (angler-copy-snippet (point-min) (point-max))
+        (should (string-match-p "P#person.name" (car kill-ring)))
+        (should-not (string-match-p "::" (car kill-ring)))
+        (should (equal original (buffer-string)))))))

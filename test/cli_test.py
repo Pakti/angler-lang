@@ -50,7 +50,7 @@ class CliTests(unittest.TestCase):
 
     def test_snippet_diagnostics(self):
         for source in (b"X =", b"42", b"-module(m).", b"_export f()->ok.",
-                       b"P :: #person{} = get_person(), P.name.", b"\xff"):
+                       b"P.name.", b"\xff"):
             result = run("snippet", data=source)
             self.assertEqual(result.returncode, 1)
             self.assertEqual(result.stdout, b"")
@@ -118,6 +118,19 @@ class CliTests(unittest.TestCase):
             self.assertEqual(result.returncode, 1)
             self.assertEqual(result.stdout, b"")
             self.assertIn(b"conflict with explicit -spec", result.stderr)
+
+    def test_record_snippet(self):
+        result = run("snippet", data=b"P :: #person{} = get_person(), P.name.")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn(b"P#person.name", result.stdout)
+        self.assertNotIn(b"::", result.stdout)
+        self.assertNotIn(b"-spec", result.stdout)
+        self.assertNotIn(b"-export", result.stdout)
+        self.assertEqual(result.stderr, b"")
+        result = run("snippet", data=b"P :: #person{} = foo(), P :: #address{} = bar().")
+        self.assertEqual(result.returncode, 1)
+        self.assertEqual(result.stdout, b"")
+        self.assertIn(b"conflicting annotation", result.stderr)
 
     def test_unicode_file(self):
         with tempfile.TemporaryDirectory() as directory:

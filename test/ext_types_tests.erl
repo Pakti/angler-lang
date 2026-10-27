@@ -25,6 +25,8 @@ conflict_test_() ->
         {error, {_, ext_types, {spec_conflict, {f,1}, _}}} = angler:transpile(Source)
     end) || Source <- [
         "-spec f(integer())->integer(). f(X :: integer())->X.",
+        "-module(m). -spec m:f(integer())->integer(). f(X :: integer())->X.",
+        "-spec f(any())->integer(). f(?ARG) :: integer()->42.",
         "f(X) :: integer()->X. -spec f(integer())->integer().",
         "-spec f(any())->any(). f(X :: any()) :: any()->X."]].
 
@@ -46,7 +48,7 @@ fallback_test() ->
 invalid_test_() ->
     [?_assertMatch({error, {_, ext_types, _}}, angler:transpile(S)) || S <- [
         "f(X ::)->X.", "f(X :: integer( )->X.",
-        "f({X,Y} :: tuple())->X+Y.", "f(X :: ?TYPE)->X.",
+        "f({X,Y} :: tuple())->X+Y.", "f(X :: ?TYPE)->X.", "f(?ARGS, X :: integer())->X.",
         "f(X :: integer())->X; g(X)->X.", "f(X :: integer())->X; f()->ok."]].
 
 trivia_test() ->

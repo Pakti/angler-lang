@@ -2,9 +2,9 @@
 
 Angler is a proposed lightweight, conservative syntax extension for Erlang. It transpiles extended source into ordinary Erlang without introducing a new runtime or type checker.
 
-> Status: milestones 1–4 implemented: lossless scanner/emitter, local exports,
-> Snippet and CLI, and Function types. Record shorthand, build mirroring, and
-> Eqwalizer remain design proposals.
+> Status: milestones 1–5 implemented: lossless scanner/emitter, local exports,
+> Snippet and CLI, Function types, and Records. Build mirroring and Eqwalizer
+> remain design proposals.
 
 ## Developing the prototype
 
@@ -176,8 +176,9 @@ For this milestone, only simple variable arguments may carry annotations;
 unannotated tuple, list, binary, map, and record patterns remain supported.
 Return annotations go before the optional guard. Types are validated using
 Erlang's type parser, including unions, records, remote types, and function
-types. Macro expansion and type constraints requiring explicit specifications
-are not implemented. Tokens removed from annotations leave comments and
+types. Macro-expanded argument patterns cannot establish a generated arity and are
+rejected on annotated functions; use an explicit spec. Macro types and type
+constraints requiring explicit specifications are not implemented. Tokens removed from annotations leave comments and
 whitespace intact; generated specs add no newlines. Nested expression blocks
 and guard alternatives are distinguished from top-level function clauses.
 
@@ -242,6 +243,26 @@ city(P) ->
 Angler maintains a simple mapping from explicitly annotated variable names to record names within each top-level function clause. Local annotations update it from the annotation onward, and the environment resets at the next clause. Full lexical scope and shadowing analysis are out of scope; programmers should avoid shadowing annotated variables. Conflicting annotations of the same variable should be reported. Initially, only simple local variable annotations need support, not annotations deeply nested in patterns.
 
 By default local annotations are syntax hints: the generated Erlang does not retain their type assertions for a type checker.
+
+Local bindings must be `Variable :: Type = Expression`, with a simple variable
+at an expression boundary; annotations inside tuple/list patterns or anonymous
+function heads are not supported. Ordinary Erlang types are accepted as syntax
+hints, but only a direct record type such as `#person{}` enables shorthand.
+Re-annotating a variable with a different type is an error; repeating the same
+type is allowed. Missing record annotations produce diagnostics rather than
+record-name inference. No record definitions or field-type checking are needed
+by the transpiler; the standard compiler or shell checks actual record fields.
+
+Header annotations seed a fresh environment for each top-level function clause.
+Local annotations affect subsequent text within that clause (or the current
+snippet), including nested expressions, and are removed before function-spec
+conflict checks. They therefore remain usable alongside an explicit `-spec`.
+There is no branch-flow or shadowing analysis: avoid shadowing annotated names,
+and supply intermediate annotations for nested records. `P.address.city` is
+rejected; use `A :: #address{} = P.address, A.city` instead. The field atom must
+immediately follow its dot, as whitespace after a dot denotes an Erlang form
+terminator. Comments/whitespace elsewhere are retained, and rewriting adds no
+newlines.
 
 ## Optional Eqwalizer support
 
@@ -339,8 +360,8 @@ entry points:
 
 | Command | Purpose |
 | --- | --- |
-| `angler transpile path/to/file.erlx` | Transpile one file to stdout, including local exports. |
-| `angler snippet` | Read an Erlang expression sequence from stdin and emit it unchanged after syntax validation. |
+| `angler transpile path/to/file.erlx` | Transpile one file to stdout, including exports, specs, and record shorthand. |
+| `angler snippet` | Transpile local annotations and record shorthand in an expression sequence from stdin. |
 | `angler --version` | Print the version. |
 | `angler --help` (or `-h`) | Print usage and current limitations. |
 | `angler build`, `angler build --clean` | Planned build-mirroring commands; currently return an error. |
@@ -370,21 +391,25 @@ The corresponding library APIs preserve the input representation:
 {ok, Latin1Output} = angler:snippet(<<"42.">>, latin1).
 ```
 
-**Deferred syntax:** because this milestone was moved ahead of Function types
-and Records, local annotations (`P :: #person{}`) and abbreviated record
-operations (`P.name`, `P{age = ...}`) are not implemented. Snippet mode reports
-a syntax error for them. Future record support will turn, for example,
-`P :: #person{} = get_person(), P.name.` into
-`P = get_person(), P#person.name.`. The shell must already know record definitions;
-Angler does not inspect shell bindings. Ordinary `P#person.name` syntax already
-passes validation without requiring record definitions in the transpiler.
+Local annotations and abbreviated record operations are implemented in snippets:
+
+```sh
+printf 'P :: #person{} = get_person(), P.name.\n' | angler snippet
+```
+
+This emits ordinary Erlang equivalent to
+`P = get_person(), P#person.name.` while retaining original whitespace and
+comments. Snippets never generate module-level specs or export attributes.
+The shell must already know record definitions; Angler does not inspect shell
+bindings. Ordinary `P#person.name` syntax also passes validation without requiring
+record definitions in the transpiler. Eqwalizer-specific casts remain deferred.
 
 On successful source commands, stdout contains only source bytes, with comments,
 encoding, BOMs, line endings, and EOF preserved. Diagnostics go to stderr, with
 file/stdin location where available. Exit codes are `0` for success, `1` for
 input/transformation/output errors, and `2` for usage errors. Input and
 transformation failures emit no partial source. Module transpilation remains
-lexical plus export rewriting; use `erlc` to validate the generated module.
+token rewriting with type, export, and record passes; use `erlc` to validate the generated module.
 
 Build mirroring will later add `--input` and `--output`, defaulting to `src_ex`
 and `src`. Those flags, directory synchronization, and Eqwalizer are not part
@@ -442,9 +467,9 @@ Benchmark scanner, rewriting, emitter, total time, and startup cost on modules o
 
 1. **Lossless round-trip (implemented):** scanner and emitter; byte-for-byte preservation with documented encoding boundaries.
 2. **Exports (implemented):** recognize `_export` and emit export attributes.
-3. **Snippet and CLI (implemented):** stdin/stdout expression validation and preservation, single-file transpilation, and basic Emacs Erlang-mode integration. Moved forward; extended expression rewriting awaits milestones 4–5.
+3. **Snippet and CLI (implemented):** stdin/stdout expression validation and preservation, single-file transpilation, and basic Emacs Erlang-mode integration. Originally moved ahead of types and records; record snippet rewriting is now implemented.
 4. **Function types (implemented):** inline annotations and multi-clause overloaded `-spec` generation.
-5. **Records:** local annotations, field access, and updates, including in snippet mode.
+5. **Records (implemented):** local annotations, field access, and updates, including in snippet mode.
 6. **Build mirroring:** recursive `src_ex/` to `src/` synchronization, arbitrary-file copying, timestamps, collision detection, stale-output deletion, and clean builds.
 7. **Eqwalizer option:** checked local annotations behind an explicit flag.
 8. **Integration:** golden tests, compilation tests, diagnostics, optional Rebar3 hook, documentation, and benchmarks.

@@ -14,7 +14,7 @@ identity_test_() ->
 errors_test_() ->
     Sources = ["X =", "42", "one. two.", "f()->ok.",
                "_export f()->ok.", "-module(m).", "-export([f/0]).",
-               "P :: #person{} = get_person(), P.name.", "P.name."],
+               "P :: #person{} = get_person(), P.unknown.field.", "P.name."],
     [?_assertMatch({error, {_, _, _}}, angler:snippet(Source)) || Source <- Sources].
 
 encoding_test() ->

@@ -18,7 +18,7 @@ transpile(Source, Encoding) ->
 transpile_with_warnings(Source, Encoding) ->
     case ext_scan:scan(Source, Encoding) of
         {ok, Document} ->
-            case ext_types:rewrite(Document) of
+            case rewrite_module(Document) of
                 {ok, Typed, Warnings} ->
                     case ext_exports:rewrite(Typed) of
                         {ok, Rewritten} -> {ok, ext_emit:emit(Rewritten), Warnings};
@@ -26,6 +26,12 @@ transpile_with_warnings(Source, Encoding) ->
                     end;
                 Error -> Error
             end;
+        Error -> Error
+    end.
+
+rewrite_module(Document) ->
+    case ext_records:rewrite(Document, module) of
+        {ok, Records} -> ext_types:rewrite(Records);
         Error -> Error
     end.
 
@@ -40,9 +46,13 @@ snippet(Source) -> snippet(Source, utf8).
 snippet(Source, Encoding) ->
     case ext_scan:scan(Source, Encoding) of
         {ok, Document} ->
-            Tokens = [T || {_, T} <- ext_scan:significant(Document)],
-            case snippet_tokens(Tokens) of
-                ok -> {ok, ext_emit:emit(Document)};
+            case ext_records:rewrite(Document, snippet) of
+                {ok, Records} ->
+                    Tokens = [T || {_, T} <- ext_scan:significant(Records)],
+                    case snippet_tokens(Tokens) of
+                        ok -> {ok, ext_emit:emit(Records)};
+                        Error -> Error
+                    end;
                 Error -> Error
             end;
         Error -> Error
