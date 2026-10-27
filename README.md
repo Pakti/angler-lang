@@ -169,6 +169,79 @@ Macros and macro expansions are assumed to contain **only standard Erlang syntax
 
 Pipeline: tokenize; identify forms and clauses; collect types and exports; build per-clause record environments; rewrite extensions; insert attributes; emit ordinary Erlang.
 
+## Project layout and build synchronization
+
+Angler treats `src_ex/` as the authoritative source tree and `src/` as a **disposable, generated mirror**. Users must not keep valuable files only in `src/`; Angler may overwrite or delete any of its contents. There is no output ownership manifest, staging tree, or transactional publication.
+
+Example:
+
+```text
+my_app/
+  rebar.config
+  src_ex/
+    server.erlx
+    protocol.erl
+    settings.json
+    include/types.hrl
+  src/
+    server.erl
+    protocol.erl
+    settings.json
+    include/types.hrl
+```
+
+`angler build` recursively mirrors the input tree:
+
+- `*.erlx` files are transpiled to corresponding `*.erl` files.
+- **Every other file** is copied byte-for-byte, regardless of extension (including `*.erl` and extensionless files).
+- The relative directory structure is preserved.
+- Colliding destinations, such as `foo.erl` and `foo.erlx` in the same input directory, are build errors.
+- Output files without corresponding inputs are deleted, as are now-empty output directories.
+- `src_ex/` must exist; missing input is an error, not an instruction to empty `src/`.
+- Input/output locations must not overlap, and `src/` must not be a symlink.
+
+Angler itself handles incremental rebuilds using file modification times; GNU Make is not required. Missing or outdated outputs are generated or copied; up-to-date outputs are left untouched to avoid unnecessary recompilation by Erlang build tools. A clean build is needed when transpiler version or options change.
+
+**Failure semantics:** If any build operation fails, Angler exits nonzero. The contents of `src/` are then **not guaranteed to be consistent**. Users may clean `src/` and rebuild. For v1 there is no rollback, staging, or guarantee that a failed build preserves the previous mirror. An optional `angler build --clean` can remove and recreate the output tree.
+
+On successful completion, `src/` contains precisely the mapped files from `src_ex/`, with no extras. Avoid following output symlinks during recursive cleanup.
+
+## CLI and snippet transpilation
+
+Use one core transformation engine with separate entry points:
+
+| Command | Purpose |
+| --- | --- |
+| `angler build` | Incrementally synchronize `src_ex/` into `src/`, then remove extra outputs. |
+| `angler build --clean` | Regenerate the output tree from scratch (proposed). |
+| `angler transpile path/to/file.erlx` | Transpile one file to stdout. |
+| `angler snippet` | Read extended Erlang expressions from stdin and emit ordinary Erlang on stdout. |
+| `angler --version` | Print the version. |
+
+Directory paths may be overridden with `--input` and `--output`, with `src_ex` and `src` as defaults.
+
+Snippet mode targets expression sequences for the Erlang shell, not whole modules. It supports local annotations and abbreviated record operations but does not generate module-level `-spec` or `-export` declarations. The shell must already know any record definitions used. Record annotations must be supplied in the snippet; Angler does not inspect shell variable bindings.
+
+Example:
+
+```sh
+printf 'P :: #person{} = get_person(), P.name.\n' | angler snippet
+```
+
+Output:
+
+```erlang
+P = get_person(), P#person.name.
+```
+
+Stdout contains only transpiled code; diagnostics go to stderr and errors return a nonzero exit status.
+
+### Emacs integration
+
+Initially use Erlang mode with a small Emacs Lisp command that passes the selected region to `angler snippet`, copies its output to the kill ring, and lets the user paste it into an Erlang shell. Emacs' `call-process-region` or `shell-command-on-region` can implement this without a new major mode. A later command may transpile a region and send it directly to the running Erlang shell process.
+
+A Rebar3 pre-compile hook can run `angler build`; Rebar3 integration is optional rather than a required part of the transpiler.
+
 ## Compatibility and tests
 
 **Vanilla Erlang identity is a central requirement.** For supported source files containing no extensions, the preferred invariant is:
@@ -179,7 +252,7 @@ emit(scan(Source)) =:= Source.
 
 Verify byte-for-byte round trips where possible, including whitespace, comments, encoding, line endings, and EOF behavior. As a fallback diagnostic, compare scanned token sequences with location metadata removed, retaining comments and values. Note that source-location-sensitive macros such as `?LINE` warrant special tests.
 
-Other tests should cover inline types, overloaded clauses, incomplete annotations, `_export`, record fields and updates, local annotations, comments and strings containing extension-like text, macros, compiler acceptance, and optional Eqwalizer output.
+Other tests should cover inline types, overloaded clauses, incomplete annotations, `_export`, record fields and updates, local annotations, comments and strings containing extension-like text, macros, compiler acceptance, and optional Eqwalizer output. Directory tests should cover copied non-`.erlx` files, nested paths, collisions, deleted inputs and output cleanup, incremental timestamps, and failed-build behavior. Snippet tests should cover stdin/stdout, local annotations, diagnostics, and shell-ready output.
 
 Generated ordinary Erlang should be idempotent under transpilation:
 
@@ -206,7 +279,9 @@ Benchmark scanner, rewriting, emitter, total time, and startup cost on modules o
 3. **Function types:** inline annotations and multi-clause overloaded `-spec` generation.
 4. **Records:** local annotations, field access, and updates.
 5. **Eqwalizer option:** checked local annotations behind an explicit flag.
-6. **Integration:** golden tests, compilation tests, diagnostics, documentation, and benchmarks.
+6. **Snippet and CLI:** stdin/stdout transpilation for shell snippets, single-file mode, and basic Emacs Erlang-mode integration.
+7. **Build mirroring:** recursive `src_ex/` to `src/` synchronization, arbitrary-file copying, timestamps, collision detection, stale-output deletion, and clean builds.
+8. **Integration:** golden tests, compilation tests, diagnostics, optional Rebar3 hook, documentation, and benchmarks.
 
 ## Open design decisions
 
