@@ -2,22 +2,27 @@
 
 Angler is a proposed lightweight, conservative syntax extension for Erlang. It transpiles extended source into ordinary Erlang without introducing a new runtime or type checker.
 
-> Status: milestones 1–2 implemented: lossless scanner/emitter and local export
-> directives. Function types, record shorthand, CLI, and build mirroring remain
-> design proposals.
+> Status: milestones 1–3 implemented: lossless scanner/emitter, local exports,
+> and Snippet and CLI (moved ahead of types and records). Function types, record
+> shorthand, build mirroring, and Eqwalizer remain design proposals.
 
 ## Developing the prototype
 
 Requires Erlang/OTP 27 (the tested version), including the compiler and EUnit,
-and Make. No external Erlang dependencies or running services are required.
+and Make. The CLI launcher targets Unix-like systems with `/dev/stdin`.
+Python 3 is needed for the CLI process tests; Emacs is optional for editor tests.
+No external Erlang dependencies or running services are required.
 
 ```sh
 make       # compile src/*.erl into _build/test
-make test  # compile and run the EUnit suite
+make test  # run EUnit and CLI process tests (requires Python 3)
+make test-emacs  # optional: run Emacs integration tests with Emacs installed
 ```
 
 In the prepared cloud environment, first run
 `. /workspace/.angler-tools/activate.sh` in each shell to activate Erlang.
+Run `bin/angler --help` after building, or add the checkout's `bin/` directory
+to `PATH` to use the `angler` command from any working directory.
 The prototype's own Erlang sources live in `src/`; the proposed generated-mirror
 workflow described below is not implemented and must not be run on this checkout.
 
@@ -102,7 +107,7 @@ arguments, or guards on marked functions are not supported yet and produce
 head diagnostics. `_export` inside `-ifdef`/`-ifndef`/`-if` branches is explicitly
 rejected: use ordinary Erlang export attributes there. Exports supplied through
 macros, includes, or conditional branches cannot be deduplicated against a
-directive; avoid marking those functions again. The CLI is not implemented yet.
+directive; avoid marking those functions again.
 
 ## Goals
 
@@ -308,37 +313,77 @@ On successful completion, `src/` contains precisely the mapped files from `src_e
 
 ## CLI and snippet transpilation
 
-Use one core transformation engine with separate entry points:
+The implemented CLI uses the core API, with separate module and expression
+entry points:
 
 | Command | Purpose |
 | --- | --- |
-| `angler build` | Incrementally synchronize `src_ex/` into `src/`, then remove extra outputs. |
-| `angler build --clean` | Regenerate the output tree from scratch (proposed). |
-| `angler transpile path/to/file.erlx` | Transpile one file to stdout. |
-| `angler snippet` | Read extended Erlang expressions from stdin and emit ordinary Erlang on stdout. |
+| `angler transpile path/to/file.erlx` | Transpile one file to stdout, including local exports. |
+| `angler snippet` | Read an Erlang expression sequence from stdin and emit it unchanged after syntax validation. |
 | `angler --version` | Print the version. |
+| `angler --help` (or `-h`) | Print usage and current limitations. |
+| `angler build`, `angler build --clean` | Planned build-mirroring commands; currently return an error. |
 
-Directory paths may be overridden with `--input` and `--output`, with `src_ex` and `src` as defaults.
-
-Snippet mode targets expression sequences for the Erlang shell, not whole modules. It supports local annotations and abbreviated record operations but does not generate module-level `-spec` or `-export` declarations. The shell must already know any record definitions used. Record annotations must be supplied in the snippet; Angler does not inspect shell variable bindings.
-
-Example:
+`transpile` and `snippet` accept `--encoding utf8|latin1` (UTF-8 by default).
+Use `--` before filenames starting with `-`. File arguments are relative to the
+caller's working directory; input files are never changed. Capture output with
+shell redirection to a **different** path:
 
 ```sh
-printf 'P :: #person{} = get_person(), P.name.\n' | angler snippet
+angler transpile example.erlx > example.erl
+angler transpile --encoding latin1 -- -example.erlx > example.erl
+printf 'X = 40, X + 2.\n' | angler snippet
 ```
 
-Output:
+Snippet mode targets one expression sequence terminated by a period, ready
+for the Erlang shell. Empty or comment-only input is also preserved. It uses
+the same scanner/emitter as module transpilation, validates with
+`erl_parse:parse_exprs`, and never runs the module export pass or evaluates any
+code. Module declarations, function definitions, and `_export` directives
+are not supported in snippets. Ordinary variables named `_export` remain valid.
+
+The corresponding library APIs preserve the input representation:
 
 ```erlang
-P = get_person(), P#person.name.
+{ok, Output} = angler:snippet(<<"X = 40, X + 2.\n">>),
+{ok, Latin1Output} = angler:snippet(<<"42.">>, latin1).
 ```
 
-Stdout contains only transpiled code; diagnostics go to stderr and errors return a nonzero exit status.
+**Deferred syntax:** because this milestone was moved ahead of Function types
+and Records, local annotations (`P :: #person{}`) and abbreviated record
+operations (`P.name`, `P{age = ...}`) are not implemented. Snippet mode reports
+a syntax error for them. Future record support will turn, for example,
+`P :: #person{} = get_person(), P.name.` into
+`P = get_person(), P#person.name.`. The shell must already know record definitions;
+Angler does not inspect shell bindings. Ordinary `P#person.name` syntax already
+passes validation without requiring record definitions in the transpiler.
+
+On successful source commands, stdout contains only source bytes, with comments,
+encoding, BOMs, line endings, and EOF preserved. Diagnostics go to stderr, with
+file/stdin location where available. Exit codes are `0` for success, `1` for
+input/transformation/output errors, and `2` for usage errors. Input and
+transformation failures emit no partial source. Module transpilation remains
+lexical plus export rewriting; use `erlc` to validate the generated module.
+
+Build mirroring will later add `--input` and `--output`, defaulting to `src_ex`
+and `src`. Those flags, directory synchronization, and Eqwalizer are not part
+of the current CLI.
 
 ### Emacs integration
 
-Initially use Erlang mode with a small Emacs Lisp command that passes the selected region to `angler snippet`, copies its output to the kill ring, and lets the user paste it into an Erlang shell. Emacs' `call-process-region` or `shell-command-on-region` can implement this without a new major mode. A later command may transpile a region and send it directly to the running Erlang shell process.
+Load the supplied helper alongside Erlang mode, using your checkout's path:
+
+```elisp
+(load-file "/path/to/angler-lang/emacs/angler.el")
+(setq angler-program "/path/to/angler-lang/bin/angler")
+```
+
+Select an expression sequence and run `M-x angler-copy-snippet`. It invokes
+`angler snippet` using UTF-8, copies successful output to the kill ring, and
+leaves the source buffer unchanged. Paste the result into an Erlang shell.
+Failures display `*Angler diagnostics*` and leave the kill ring unchanged.
+Build with `make` first and ensure `erl` is available to Emacs through `PATH`.
+A future command may send the output directly to the running Erlang shell.
 
 A Rebar3 pre-compile hook can run `angler build`; Rebar3 integration is optional rather than a required part of the transpiler.
 
@@ -374,13 +419,13 @@ Benchmark scanner, rewriting, emitter, total time, and startup cost on modules o
 
 ## Development milestones
 
-1. **Lossless round-trip:** scanner and emitter; establish byte-for-byte preservation and document any exceptions.
-2. **Exports:** recognize `_export` and emit export attributes.
-3. **Function types:** inline annotations and multi-clause overloaded `-spec` generation.
-4. **Records:** local annotations, field access, and updates.
-5. **Eqwalizer option:** checked local annotations behind an explicit flag.
-6. **Snippet and CLI:** stdin/stdout transpilation for shell snippets, single-file mode, and basic Emacs Erlang-mode integration.
-7. **Build mirroring:** recursive `src_ex/` to `src/` synchronization, arbitrary-file copying, timestamps, collision detection, stale-output deletion, and clean builds.
+1. **Lossless round-trip (implemented):** scanner and emitter; byte-for-byte preservation with documented encoding boundaries.
+2. **Exports (implemented):** recognize `_export` and emit export attributes.
+3. **Snippet and CLI (implemented):** stdin/stdout expression validation and preservation, single-file transpilation, and basic Emacs Erlang-mode integration. Moved forward; extended expression rewriting awaits milestones 4–5.
+4. **Function types:** inline annotations and multi-clause overloaded `-spec` generation.
+5. **Records:** local annotations, field access, and updates, including in snippet mode.
+6. **Build mirroring:** recursive `src_ex/` to `src/` synchronization, arbitrary-file copying, timestamps, collision detection, stale-output deletion, and clean builds.
+7. **Eqwalizer option:** checked local annotations behind an explicit flag.
 8. **Integration:** golden tests, compilation tests, diagnostics, optional Rebar3 hook, documentation, and benchmarks.
 
 ## Open design decisions

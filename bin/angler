@@ -1,0 +1,9 @@
+#!/bin/sh
+set -eu
+script_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+beam_dir="$script_dir/../_build/test"
+if [ ! -f "$beam_dir/ext_cli.beam" ]; then
+    echo "angler: run make in the Angler checkout before using the CLI" >&2
+    exit 1
+fi
+exec erl -noshell -noinput -pa "$beam_dir" -s ext_cli main -extra "$@"
