@@ -2,8 +2,9 @@
 
 Angler is a proposed lightweight, conservative syntax extension for Erlang. It transpiles extended source into ordinary Erlang without introducing a new runtime or type checker.
 
-> Status: milestone 1 implemented: lossless scanner/emitter prototype. The
-> remaining syntax extensions, CLI, and build mirroring are design proposals.
+> Status: milestones 1–2 implemented: lossless scanner/emitter and local export
+> directives. Function types, record shorthand, CLI, and build mirroring remain
+> design proposals.
 
 ## Developing the prototype
 
@@ -59,7 +60,49 @@ missing final newlines, LF/CRLF line endings, escapes, and Unicode text:
 The suite exercises both input representations, the indexed token view,
 encoding and scanner errors, repository-source round trips and idempotence,
 and compilation/execution of emitted Erlang using an include, record macros,
-and `?LINE`. Syntax rewriting is reserved for later milestones.
+and `?LINE`.
+
+### Transpiling local exports
+
+The public API scans, expands exports, and emits source of the same type
+(binary or character list):
+
+```erlang
+{ok, Erlang} = angler:transpile(
+    <<"-module(example).\n_export\nstart() -> ok.\n">>).
+```
+
+`angler:transpile/2` also accepts `utf8` or `latin1`, with the same encoding
+rules as `ext_scan:scan/2`. Scanner errors pass through unchanged. Directive
+errors return `{error, {Location, ext_exports, Reason}}`; use
+`ext_exports:format_error(Reason)` for a readable message.
+
+Each `_export` at the beginning of a top-level form marks the immediately
+following function, including all its clauses. Comments and whitespace may
+intervene; attributes (including `-spec`), repeated directives, missing
+functions, and unsupported heads produce diagnostics. Arity is determined from
+the first function head with Erlang's parser, so nested patterns and guards are
+handled structurally. The normal compiler remains responsible for validating
+the complete function and consistency of its clauses.
+
+The emitter removes only directive tokens and inserts one combined export
+attribute immediately after `-module`, ahead of other attributes/includes and
+function definitions. Module-less fragments use the first definition as the
+insertion point; they still need a module declaration to compile. Existing
+unconditional, literal `-export` entries are respected without adding duplicate
+exports, and existing attributes remain byte-for-byte intact. Generated text
+includes a separating space but adds no newlines, preserving `?LINE` and all
+original comments and line endings. Columns on the insertion line may shift.
+Without directives, transpilation is an exact round trip; applying it again to
+generated Erlang leaves the output unchanged. There is no export-by-name rule.
+
+This milestone does not run the preprocessor: macros in bodies and ordinary
+includes are preserved for the compiler. Macro-generated function names,
+arguments, or guards on marked functions are not supported yet and produce
+head diagnostics. `_export` inside `-ifdef`/`-ifndef`/`-if` branches is explicitly
+rejected: use ordinary Erlang export attributes there. Exports supplied through
+macros, includes, or conditional branches cannot be deduplicated against a
+directive; avoid marking those functions again. The CLI is not implemented yet.
 
 ## Goals
 
@@ -345,7 +388,7 @@ Benchmark scanner, rewriting, emitter, total time, and startup cost on modules o
 1. Inline annotation grammar for literal and complex patterns.
 2. Sound handling of partially annotated multi-clause specifications, especially overlapping `any()` overloads.
 3. Conflict policy between existing and generated `-spec` declarations.
-4. Whether comments or module attributes may intervene between `_export` and its function.
+4. Resolved for milestone 2: comments/whitespace may intervene between `_export` and its function; module attributes may not.
 5. Which local annotation positions support checked Eqwalizer casts.
 6. Precise whitespace and source-location compatibility guarantees.
 
