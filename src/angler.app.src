@@ -1,0 +1,8 @@
+{application, angler, [
+    {description, "Conservative syntax extensions for Erlang"},
+    {vsn, "0.3.0"},
+    {registered, []},
+    {applications, [kernel, stdlib]},
+    {env, []},
+    {modules, []}
+]}.

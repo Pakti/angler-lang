@@ -9,20 +9,39 @@ Angler is a proposed lightweight, conservative syntax extension for Erlang. It t
 ## Developing the prototype
 
 Requires Erlang/OTP 27 (the tested version), including the compiler and EUnit,
-and Make. The CLI launcher targets Unix-like systems with `/dev/stdin`.
+and either Make or Rebar3 (tested with 3.24.0). The CLI launcher targets Unix-like systems with `/dev/stdin`.
 Python 3 is needed for the CLI process tests; Emacs is optional for editor tests.
-No external Erlang dependencies or running services are required.
+No application dependencies or running services are required. Rebar3 downloads
+the pinned erlfmt 1.8.0 project plugin on first use.
 
 ```sh
-make       # compile src/*.erl into _build/test
+make       # compile into _build/default/lib/angler/ebin
 make test  # run EUnit and CLI process tests (requires Python 3)
 make test-emacs  # optional: run Emacs integration tests with Emacs installed
-make fmt   # format Erlang sources/tests in place (requires erlfmt on PATH)
+make fmt   # format sources/tests/config in place with standalone erlfmt
 ```
 
 To format generated Erlang instead, run `make fmt FMT_FILES=example.erl`.
-Override `ERLFMT` to select a formatter executable outside `PATH`.
+Override `ERLFMT` to select a standalone formatter executable outside `PATH`.
+Use `rebar3 fmt --write` below to use the pinned plugin without a standalone installation.
 Formatting is optional and can change source line numbers, including `?LINE`.
+
+Rebar3 is also supported directly:
+
+```sh
+rebar3 compile          # same application ebin path as make
+rebar3 shell            # interactive shell with angler on the code path
+rebar3 eunit            # Erlang test suites (not Python/Emacs tests)
+rebar3 as fast compile  # compile without debug information
+rebar3 fmt --write      # format the configured file set in place
+rebar3 fmt --check      # check formatting without modifying files
+```
+
+Use `make test` for both EUnit and CLI process tests, and `make test-emacs`
+for editor integration. There are no Common Test suites yet. `rebar.config`
+selects the five EUnit suites explicitly so example fixture modules are not
+mistaken for suites. Both build tools share the application output directory,
+which is also used by `bin/angler`. Build again after changing source files.
 
 In the prepared cloud environment, first run
 `. /workspace/.angler-tools/activate.sh` in each shell to activate Erlang.
@@ -31,7 +50,7 @@ to `PATH` to use the `angler` command from any working directory.
 The prototype's own Erlang sources live in `src/`; the proposed generated-mirror
 workflow described below is not implemented and must not be run on this checkout.
 
-From `erl -pa _build/test` after compilation:
+From `erl -pa _build/default/lib/angler/ebin` after compilation:
 
 ```erlang
 Source = <<"% keep this comment\r\nf() -> ok.">>,
