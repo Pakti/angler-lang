@@ -1,0 +1,2 @@
+-record(person, {age = 41}).
+-define(NEXT(P), P#person{age = P#person.age + 1}).

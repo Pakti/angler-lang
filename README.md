@@ -2,7 +2,64 @@
 
 Angler is a proposed lightweight, conservative syntax extension for Erlang. It transpiles extended source into ordinary Erlang without introducing a new runtime or type checker.
 
-> Status: preliminary design specification (v0.1). No implementation is claimed yet.
+> Status: milestone 1 implemented: lossless scanner/emitter prototype. The
+> remaining syntax extensions, CLI, and build mirroring are design proposals.
+
+## Developing the prototype
+
+Requires Erlang/OTP 27 (the tested version), including the compiler and EUnit,
+and Make. No external Erlang dependencies or running services are required.
+
+```sh
+make       # compile src/*.erl into _build/test
+make test  # compile and run the EUnit suite
+```
+
+In the prepared cloud environment, first run
+`. /workspace/.angler-tools/activate.sh` in each shell to activate Erlang.
+The prototype's own Erlang sources live in `src/`; the proposed generated-mirror
+workflow described below is not implemented and must not be run on this checkout.
+
+From `erl -pa _build/test` after compilation:
+
+```erlang
+Source = <<"% keep this comment\r\nf() -> ok.">>,
+{ok, Document} = ext_scan:scan(Source),
+Source = ext_emit:emit(Document),
+Tokens = ext_scan:tokens(Document),
+Significant = ext_scan:significant(Document).
+```
+
+`scan/1` returns `{ok, Document}` or `{error, Reason}`. `tokens/1` returns every
+original `erl_scan` token, including comments and whitespace, with its text and
+location annotations intact. `significant/1` returns `{Index, Token}` pairs,
+excluding comments and whitespace; one-based indices point into the complete
+stream. A `dot` token may itself contain trailing whitespace, as specified by
+`erl_scan`; that text stays attached to the token. Documents are intended to be
+passed between the scanner and emitter without changing their representation.
+
+`emit/1` concatenates token text rather than formatting token values. Successful
+scans preserve the input exactly, including empty input, trailing comments,
+missing final newlines, LF/CRLF line endings, escapes, and Unicode text:
+
+- Binary input defaults to UTF-8 and produces identical bytes. An initial UTF-8
+  BOM is retained separately and restored on emission; token locations start
+  after the BOM at `{1, 1}`.
+- For Latin-1 bytes, use `ext_scan:scan(Source, latin1)`. Encoding declarations
+  in comments are preserved but do not select the encoding automatically.
+- Character-list input contains Unicode code points and emits the same list.
+  The encoding argument only controls decoding and re-encoding of binary input.
+- Invalid or incomplete encoded binaries return `{error, {invalid_encoding,
+  Encoding}}`. Lexical failures return `{error, ErrorInfo}` using `erl_scan`'s
+  location/module/description tuple. No partial document is emitted.
+- UTF-16/UTF-32 and arbitrary invalid source bytes are unsupported. Scanning is
+  lexical only: it neither validates whole-module syntax nor expands macros or
+  includes. Compiler acceptance is checked separately in the tests.
+
+The suite exercises both input representations, the indexed token view,
+encoding and scanner errors, repository-source round trips and idempotence,
+and compilation/execution of emitted Erlang using an include, record macros,
+and `?LINE`. Syntax rewriting is reserved for later milestones.
 
 ## Goals
 
