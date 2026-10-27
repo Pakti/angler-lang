@@ -2,8 +2,7 @@ ERLC ?= erlc
 ERL ?= erl
 PYTHON ?= python3
 EMACS ?= emacs
-ERLFMT ?= erlfmt
-FMT_FILES ?= src/*.erl src/*.app.src test/*.erl test/fixtures/*.erl test/fixtures/*.hrl rebar.config
+REBAR3 := rebar3
 BUILD := _build/default/lib/angler/ebin
 TEST_BUILD := _build/test
 
@@ -22,7 +21,7 @@ test-emacs: all
 	$(EMACS) -Q --batch -L emacs -l test/angler-emacs-tests.el -f ert-run-tests-batch-and-exit
 
 fmt:
-	$(ERLFMT) -w $(FMT_FILES)
+	$(REBAR3) fmt -w
 
 clean:
 	rm -rf _build
