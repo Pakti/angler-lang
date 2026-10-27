@@ -37,7 +37,7 @@ options([File | Rest], Encoding, Files, EndOptions) ->
 
 execute("transpile", Encoding, [Path]) ->
     case file:read_file(Path) of
-        {ok, Source} -> result(angler:transpile(Source, Encoding), Path);
+        {ok, Source} -> result(angler:transpile_with_warnings(Source, Encoding), Path);
         {error, Reason} -> diagnostic(Path, file:format_error(Reason))
     end;
 execute("snippet", Encoding, []) ->
@@ -64,6 +64,12 @@ read_stdin(Device, Chunks) ->
         Error -> Error
     end.
 
+result({ok, Source, Warnings}, Path) ->
+    lists:foreach(fun({Location, Module, Reason}) ->
+        io:format(standard_error, "~ts: ~tswarning: ~ts~n",
+                  [Path, location(Location), Module:format_error(Reason)])
+    end, Warnings),
+    output(Source);
 result({ok, Source}, _) -> output(Source);
 result({error, {Location, Module, Reason}}, Path) when is_atom(Module) ->
     diagnostic(Path, [location(Location), Module:format_error(Reason)]);

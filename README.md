@@ -2,9 +2,9 @@
 
 Angler is a proposed lightweight, conservative syntax extension for Erlang. It transpiles extended source into ordinary Erlang without introducing a new runtime or type checker.
 
-> Status: milestones 1–3 implemented: lossless scanner/emitter, local exports,
-> and Snippet and CLI (moved ahead of types and records). Function types, record
-> shorthand, build mirroring, and Eqwalizer remain design proposals.
+> Status: milestones 1–4 implemented: lossless scanner/emitter, local exports,
+> Snippet and CLI, and Function types. Record shorthand, build mirroring, and
+> Eqwalizer remain design proposals.
 
 ## Developing the prototype
 
@@ -158,7 +158,28 @@ Generated specification:
              (binary(), integer()) -> binary().
 ```
 
-Missing annotations contribute `any()`. If the entire specification consists only of `any()` types, no `-spec` is generated. Partially annotated clauses may create overlapping or overly broad alternatives: the transpiler should warn, and the exact fallback policy is still open. Existing explicit specifications remain an escape hatch; conflicts with generated ones must be diagnosed.
+Missing annotations contribute `any()`. If every annotation is `any()`, no
+`-spec` is generated. Partially annotated overloaded clauses retain their
+`any()` fallbacks and produce a warning about potentially broad or overlapping
+alternatives. The CLI prints warnings to stderr while returning success.
+`angler:transpile_with_warnings(Source, Encoding)` returns
+`{ok, Output, Warnings}`; the simpler `transpile/1,2` API returns only output.
+
+An explicit `-spec` and **any inline function annotation** on the same name/arity
+are an error, even if their types appear identical or the annotations are all
+`any()`. The diagnostic identifies the function and both locations. Remove one
+source of function specifications. Explicit specs without inline annotations
+are preserved unchanged. Local annotations do not generate function specs and
+will remain allowed alongside explicit specs.
+
+For this milestone, only simple variable arguments may carry annotations;
+unannotated tuple, list, binary, map, and record patterns remain supported.
+Return annotations go before the optional guard. Types are validated using
+Erlang's type parser, including unions, records, remote types, and function
+types. Macro expansion and type constraints requiring explicit specifications
+are not implemented. Tokens removed from annotations leave comments and
+whitespace intact; generated specs add no newlines. Nested expression blocks
+and guard alternatives are distinguished from top-level function clauses.
 
 ### Local export directive
 
@@ -422,7 +443,7 @@ Benchmark scanner, rewriting, emitter, total time, and startup cost on modules o
 1. **Lossless round-trip (implemented):** scanner and emitter; byte-for-byte preservation with documented encoding boundaries.
 2. **Exports (implemented):** recognize `_export` and emit export attributes.
 3. **Snippet and CLI (implemented):** stdin/stdout expression validation and preservation, single-file transpilation, and basic Emacs Erlang-mode integration. Moved forward; extended expression rewriting awaits milestones 4–5.
-4. **Function types:** inline annotations and multi-clause overloaded `-spec` generation.
+4. **Function types (implemented):** inline annotations and multi-clause overloaded `-spec` generation.
 5. **Records:** local annotations, field access, and updates, including in snippet mode.
 6. **Build mirroring:** recursive `src_ex/` to `src/` synchronization, arbitrary-file copying, timestamps, collision detection, stale-output deletion, and clean builds.
 7. **Eqwalizer option:** checked local annotations behind an explicit flag.
@@ -430,9 +451,9 @@ Benchmark scanner, rewriting, emitter, total time, and startup cost on modules o
 
 ## Open design decisions
 
-1. Inline annotation grammar for literal and complex patterns.
-2. Sound handling of partially annotated multi-clause specifications, especially overlapping `any()` overloads.
-3. Conflict policy between existing and generated `-spec` declarations.
+1. Resolved for Function types: only simple variable patterns may carry inline annotations initially.
+2. Resolved for Function types: retain `any()` fallbacks and warn for incomplete overloaded signatures; use an explicit spec for precise contracts.
+3. Resolved: explicit `-spec` plus inline function annotations on the same name/arity is an error, including identical types. Local annotations are independent.
 4. Resolved for milestone 2: comments/whitespace may intervene between `_export` and its function; module attributes may not.
 5. Which local annotation positions support checked Eqwalizer casts.
 6. Precise whitespace and source-location compatibility guarantees.

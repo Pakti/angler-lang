@@ -105,6 +105,20 @@ class CliTests(unittest.TestCase):
             self.assertEqual((result.returncode, result.stdout, result.stderr),
                              (0, path.read_bytes(), b""))
 
+    def test_function_types(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = pathlib.Path(directory) / "typed.erlx"
+            path.write_text("-module(m). _export f(X :: integer())->X; f(X)->X.")
+            result = run("transpile", str(path))
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertIn(b"-spec f(", result.stdout)
+            self.assertIn(b"warning:", result.stderr)
+            path.write_text("-module(m). -spec f(integer())->integer(). f(X :: integer())->X.")
+            result = run("transpile", str(path))
+            self.assertEqual(result.returncode, 1)
+            self.assertEqual(result.stdout, b"")
+            self.assertIn(b"conflict with explicit -spec", result.stderr)
+
     def test_unicode_file(self):
         with tempfile.TemporaryDirectory() as directory:
             path = pathlib.Path(directory) / "café.erlx"
