@@ -17,7 +17,12 @@ No external Erlang dependencies or running services are required.
 make       # compile src/*.erl into _build/test
 make test  # run EUnit and CLI process tests (requires Python 3)
 make test-emacs  # optional: run Emacs integration tests with Emacs installed
+make fmt   # format Erlang sources/tests in place (requires erlfmt on PATH)
 ```
+
+To format generated Erlang instead, run `make fmt FMT_FILES=example.erl`.
+Override `ERLFMT` to select a formatter executable outside `PATH`.
+Formatting is optional and can change source line numbers, including `?LINE`.
 
 In the prepared cloud environment, first run
 `. /workspace/.angler-tools/activate.sh` in each shell to activate Erlang.

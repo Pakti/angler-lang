@@ -2,9 +2,11 @@ ERLC ?= erlc
 ERL ?= erl
 PYTHON ?= python3
 EMACS ?= emacs
+ERLFMT ?= erlfmt
+FMT_FILES ?= src/*.erl test/*.erl test/fixtures/*.erl test/fixtures/*.hrl
 BUILD := _build/test
 
-.PHONY: all test test-emacs clean
+.PHONY: all test test-emacs fmt clean
 all:
 	mkdir -p $(BUILD)
 	$(ERLC) -Werror +debug_info -o $(BUILD) src/*.erl
@@ -16,6 +18,9 @@ test: all
 
 test-emacs: all
 	$(EMACS) -Q --batch -L emacs -l test/angler-emacs-tests.el -f ert-run-tests-batch-and-exit
+
+fmt:
+	$(ERLFMT) -w $(FMT_FILES)
 
 clean:
 	rm -rf _build
