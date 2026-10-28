@@ -140,7 +140,7 @@ directive; avoid marking those functions again.
 
 - Attach types directly to function arguments and return values, avoiding separate `-spec` boilerplate.
 - Mark exported functions next to their definitions instead of maintaining centralized `-export` lists.
-- Use concise record field access and updates when a variable's record type is explicitly annotated.
+- Use concise record field access and updates when a record name is annotated or obvious from a local binding.
 - Keep the implementation in Erlang, small enough for ordinary Erlang programmers to understand and modify.
 - Preserve existing Erlang source unchanged wherever possible, ideally byte-for-byte.
 
@@ -282,7 +282,8 @@ planned extension to the completed Exports milestone.
 
 ### Record fields and updates
 
-Only explicitly record-annotated variables support abbreviated access.
+Variables with an explicit record annotation or an obvious local record binding
+support abbreviated access. See local record-name deduction below.
 
 ```erlang
 get_name(P :: #person{}) :: string() ->
@@ -292,7 +293,40 @@ birthday(P :: #person{}) ->
     P{age = P.age + 1}.
 ```
 
-`P.name` becomes `P#person.name`; `P{age = ...}` becomes `P#person{age = ...}`. Ordinary Erlang record operations remain valid. No record-type inference or field-type checking is performed by Angler.
+`P.name` becomes `P#person.name`; `P{age = ...}` becomes `P#person{age = ...}`.
+Ordinary Erlang record operations remain valid. Angler performs only the limited
+local record-name deduction described below; it does not check field types.
+
+### Local record-name deduction
+
+The following simple bindings establish a record name without a redundant
+annotation, in both module function bodies and snippets:
+
+```erlang
+P = #person{name = "Ada", age = 41},
+Older = P#person{age = 42},
+Next = Older{age = Older.age + 1},
+Alias = Next,
+Alias.name.
+```
+
+Recognized right-hand sides are direct `#record{...}` constructions,
+`Variable#record{...}` updates, abbreviated `Variable{...}` updates when that
+variable's record name is already known, and aliases of known record variables.
+These must be complete right-hand sides of simple, top-level `Variable = RHS`
+expression bindings. The mapping becomes available **after** that binding,
+resets at each top-level function clause or snippet, and never generates
+function specs. `_` does not introduce a binding.
+
+This is record-name deduction only. No deduction comes from function calls,
+field values, branches, macros, parenthesized expressions or nested patterns
+and bindings. Use explicit annotations in those cases. Deductions inside
+nested `case`/`fun` bodies are not propagated or analyzed. Existing shadowing
+limitations still apply; avoid shadowing annotated or deduced variable names.
+An explicit annotation for the same record is compatible (and retains its
+field constraints); a different record name or a non-record annotation is a
+conflict. Conflicting deduced bindings are errors too. No general type
+inference or field-type checking is introduced.
 
 ### Local annotations for nested records
 
@@ -311,7 +345,7 @@ city(P) ->
     A#address.city.
 ```
 
-Angler maintains a simple mapping from explicitly annotated variable names to record names within each top-level function clause. Local annotations update it from the annotation onward, and the environment resets at the next clause. Full lexical scope and shadowing analysis are out of scope; programmers should avoid shadowing annotated variables. Conflicting annotations of the same variable should be reported. Initially, only simple local variable annotations need support, not annotations deeply nested in patterns.
+Angler maintains a simple mapping from annotated or locally deduced variable names to record names within each top-level function clause. Local annotations update it from the annotation onward, and the environment resets at the next clause. Full lexical scope and shadowing analysis are out of scope; programmers should avoid shadowing annotated variables. Conflicting annotations of the same variable should be reported. Initially, only simple local variable annotations need support, not annotations deeply nested in patterns.
 
 By default local annotations are syntax hints: the generated Erlang does not retain their type assertions for a type checker.
 
@@ -320,8 +354,8 @@ at an expression boundary; annotations inside tuple/list patterns or anonymous
 function heads are not supported. Ordinary Erlang types are accepted as syntax
 hints, but only a direct record type such as `#person{}` enables shorthand.
 Re-annotating a variable with a different type is an error; repeating the same
-type is allowed. Missing record annotations produce diagnostics rather than
-record-name inference. No record definitions or field-type checking are needed
+type is allowed. If neither an explicit annotation nor a supported local binding establishes a
+record name, abbreviated operations produce a diagnostic. No record definitions or field-type checking are needed
 by the transpiler; the standard compiler or shell checks actual record fields.
 
 Header annotations seed a fresh environment for each top-level function clause.
@@ -636,7 +670,7 @@ Benchmark scanner, rewriting, emitter, total time, and startup cost on modules o
 ## Deliberately out of scope for v1
 
 - New conditional expressions such as `cond`.
-- Type inference or type checking inside Angler.
+- General type inference or type checking; only limited local record-name deduction is supported.
 - General lexical scope analysis or support for shadowing annotated variables.
 - Extended syntax inside macro definitions or expansions.
 - Automatic exports based on function naming.
@@ -649,7 +683,7 @@ Benchmark scanner, rewriting, emitter, total time, and startup cost on modules o
 2. [x] **Exports (implemented):** plain `_export` and generated export attributes. Optional tagged groups are an agreed, pending enhancement.
 3. [x] **Snippet and CLI (implemented):** stdin/stdout expression validation and preservation, single-file transpilation, and basic Emacs Erlang-mode integration. Originally moved ahead of types and records; record snippet rewriting is now implemented.
 4. [x] **Function types (implemented):** inline annotations and multi-clause overloaded `-spec` generation.
-5. [x] **Records (implemented):** local annotations, field access, and updates, including in snippet mode.
+5. [x] **Records (implemented):** local annotations, field access, updates, and limited local record-name deduction, including in snippet mode.
 6. [x] **Build mirroring (implemented):** recursive synchronization, arbitrary-file copying, timestamps, collision detection, default warnings for extras, opt-in `-d`/`--delete`, force regeneration with `--clean`, and `--warnings-as-errors`.
 7. [ ] **Emacs support:** an `angler-mode` major mode derived from the Erlang distribution's `erlang-mode`, with `.erlx` association, highlighting, indentation and navigation for extended syntax; source-preserving transpile/copy/send commands and compilation integration, covered by ERT tests. Mode setup (inheritance, `.erlx` association, hooks, and buffer-local customization), syntax highlighting, and `angler-copy-snippet` are implemented and tested. Angler-specific indentation/navigation, additional commands, and direct shell sending remain planned.
 8. [ ] **Eqwalizer option:** checked local annotations behind an explicit flag.
