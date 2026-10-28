@@ -1,644 +1,148 @@
 # Angler
 
-Angler is a proposed lightweight, conservative syntax extension for Erlang. It transpiles extended source into ordinary Erlang without introducing a new runtime or type checker.
+Angler adds a little syntactic sugar to Erlang to reduce repetition while keeping
+code familiar to Erlang programmers. It preprocesses `.erlx` files into ordinary
+`.erl` files, with no new runtime or type checker. The generated files remain
+usable without Angler.
 
-> Status: milestones 1–7 implemented: lossless scanner/emitter, local exports,
-> Snippet and CLI, Function types, Records, Build mirroring, and Emacs support.
-> Eqwalizer and the remaining integration work are planned.
+**Alpha software.** Developed and tested on Linux with Erlang/OTP 27; use on
+OTP 29, including native-record syntax, has also been verified by the author.
+Syntax support depends on the OTP version running Angler.
 
-## Developing the prototype
+Angler currently provides:
 
-Requires Erlang/OTP 27 (the tested version), including the compiler and EUnit,
-and either Make or Rebar3 (tested with 3.24.0). The CLI launcher targets Unix-like systems with `/dev/stdin`.
-Python 3 is needed for the CLI process tests; Emacs is optional for editor tests.
-No application dependencies or running services are required. Rebar3 downloads
-the pinned erlfmt 1.8.0 project plugin on first use.
+- **Exports beside their definitions:** `_export`, optionally tagged to group
+  generated export attributes.
+- **Inline function types:** argument and return annotations generate `-spec`
+  declarations, including overloaded specs.
+- **Concise tuple-record operations:** `P.age` and `P{age = 42}`, using an
+  annotation or a simple local binding to establish the record name.
+- **CLI and project builds:** transpile files, pipe expression snippets, or
+  incrementally mirror an extended-source tree into ordinary Erlang.
+- **Emacs support:** an `erlang-mode`-derived major mode with highlighting,
+  indentation, navigation, and commands to preprocess code for an Erlang shell.
 
-```sh
-make       # compile into _build/default/lib/angler/ebin
-make test  # run EUnit and CLI process tests (requires Python 3)
-make test-emacs  # optional: run Emacs integration tests with Emacs installed
-make fmt   # format configured sources/tests/snippets via rebar3 fmt -w
-```
-
-To format a single generated file, run `rebar3 fmt -w example.erl`.
-`make fmt` uses the file list in `rebar.config`, including `_snippets/*.erl`.
-Formatting is optional and can change source line numbers; see
-[Known limitations](#known-limitations) for `?FILE` and `?LINE` behavior.
-
-Rebar3 is also supported directly:
-
-```sh
-rebar3 compile          # same application ebin path as make
-rebar3 shell            # interactive shell with angler on the code path
-rebar3 eunit            # Erlang test suites (not Python/Emacs tests)
-rebar3 as fast compile  # compile without debug information
-rebar3 fmt --write      # format the configured file set in place
-rebar3 fmt --check      # check formatting without modifying files
-```
-
-Use `make test` for both EUnit and CLI process tests, and `make test-emacs`
-for editor integration. There are no Common Test suites yet. `rebar.config`
-selects the six EUnit suites explicitly so example fixture modules are not
-mistaken for suites. Both build tools share the application output directory,
-which is also used by `bin/angler`. Build again after changing source files.
-
-In the prepared cloud environment, first run
-`. /workspace/.angler-tools/activate.sh` in each shell to activate Erlang.
-Run `bin/angler --help` after building, or add the checkout's `bin/` directory
-to `PATH` to use the `angler` command from any working directory.
-The prototype's own Erlang sources live in `src/`. Build mirroring is intended
-for consuming projects with a `src_ex/` input tree; do not use this checkout's
-handwritten `src/` as a generated output directory.
-
-From `erl -pa _build/default/lib/angler/ebin` after compilation:
+## A small example
 
 ```erlang
-Source = <<"% keep this comment\r\nf() -> ok.">>,
-{ok, Document} = ext_scan:scan(Source),
-Source = ext_emit:emit(Document),
-Tokens = ext_scan:tokens(Document),
-Significant = ext_scan:significant(Document).
-```
+-module(example).
+-record(person, {name, age}).
 
-`scan/1` returns `{ok, Document}` or `{error, Reason}`. `tokens/1` returns every
-original `erl_scan` token, including comments and whitespace, with its text and
-location annotations intact. `significant/1` returns `{Index, Token}` pairs,
-excluding comments and whitespace; one-based indices point into the complete
-stream. A `dot` token may itself contain trailing whitespace, as specified by
-`erl_scan`; that text stays attached to the token. Documents are intended to be
-passed between the scanner and emitter without changing their representation.
-
-`emit/1` concatenates token text rather than formatting token values. Successful
-scans preserve the input exactly, including empty input, trailing comments,
-missing final newlines, LF/CRLF line endings, escapes, and Unicode text:
-
-- Binary input defaults to UTF-8 and produces identical bytes. An initial UTF-8
-  BOM is retained separately and restored on emission; token locations start
-  after the BOM at `{1, 1}`.
-- For Latin-1 bytes, use `ext_scan:scan(Source, latin1)`. Encoding declarations
-  in comments are preserved but do not select the encoding automatically.
-- Character-list input contains Unicode code points and emits the same list.
-  The encoding argument only controls decoding and re-encoding of binary input.
-- Invalid or incomplete encoded binaries return `{error, {invalid_encoding,
-  Encoding}}`. Lexical failures return `{error, ErrorInfo}` using `erl_scan`'s
-  location/module/description tuple. No partial document is emitted.
-- UTF-16/UTF-32 and arbitrary invalid source bytes are unsupported. Scanning is
-  lexical only: it neither validates whole-module syntax nor expands macros or
-  includes. Compiler acceptance is checked separately in the tests.
-
-The suite exercises both input representations, the indexed token view,
-encoding and scanner errors, repository-source round trips and idempotence,
-and compilation/execution of emitted Erlang using an include, record macros,
-and `?LINE`.
-
-### Transpiling local exports
-
-The public API scans, expands exports, and emits source of the same type
-(binary or character list):
-
-```erlang
-{ok, Erlang} = angler:transpile(
-    <<"-module(example).\n_export\nstart() -> ok.\n">>).
-```
-
-`angler:transpile/2` also accepts `utf8` or `latin1`, with the same encoding
-rules as `ext_scan:scan/2`. Scanner errors pass through unchanged. Directive
-errors return `{error, {Location, ext_exports, Reason}}`; use
-`ext_exports:format_error(Reason)` for a readable message.
-
-Each `_export` at the beginning of a top-level form marks the immediately
-following function, including all its clauses. Comments and whitespace may
-intervene; attributes (including `-spec`), repeated directives, missing
-functions, and unsupported heads produce diagnostics. Arity is determined from
-the first function head with Erlang's parser, so nested patterns and guards are
-handled structurally. The normal compiler remains responsible for validating
-the complete function and consistency of its clauses.
-
-The emitter removes only directive tokens and inserts export groups immediately
-after `-module`, ahead of other attributes/includes and
-function definitions. Module-less fragments use the first definition as the
-insertion point; they still need a module declaration to compile. Existing
-unconditional, literal `-export` entries are respected without adding duplicate
-exports, and existing attributes remain byte-for-byte intact. Generated groups
-are separated by blank lines, including before
-the following source form. Transformed code has no source-line preservation
-guarantee. Optional erlfmt formatting provides standard layout and can change line
-numbers. See [Known limitations](#known-limitations).
-Without directives, transpilation is an exact round trip; applying it again to
-generated Erlang leaves the output unchanged. There is no export-by-name rule.
-
-This milestone does not run the preprocessor: macros in bodies and ordinary
-includes are preserved for the compiler. Macro-generated function names,
-arguments, or guards on marked functions are not supported yet and produce
-head diagnostics. `_export` inside `-ifdef`/`-ifndef`/`-if` branches is explicitly
-rejected: use ordinary Erlang export attributes there. Exports supplied through
-macros, includes, or conditional branches cannot be deduplicated against a
-directive; avoid marking those functions again.
-
-## Goals
-
-- Attach types directly to function arguments and return values, avoiding separate `-spec` boilerplate.
-- Mark exported functions next to their definitions instead of maintaining centralized `-export` lists.
-- Use concise record field access and updates when a record name is annotated or obvious from a local binding.
-- Keep the implementation in Erlang, small enough for ordinary Erlang programmers to understand and modify.
-- Preserve existing Erlang source unchanged wherever possible, ideally byte-for-byte.
-
-Angler is intended to be Erlang with a few syntactic conveniences, not a new language.
-
-## Proposed syntax
-
-### Inline function types
-
-Angler input:
-
-```erlang
+_export(people)
 birthday(P :: #person{}) :: #person{} ->
     P{age = P.age + 1}.
 ```
 
-Generated Erlang:
+Generated Erlang, formatted with `erlfmt`:
 
 ```erlang
+-module(example).
+
+%% people
+-export([birthday/1]).
+
+-record(person, {name, age}).
+
 -spec birthday(#person{}) -> #person{}.
 birthday(P) ->
     P#person{age = P#person.age + 1}.
 ```
 
-Argument types and return types use Erlang's existing `::` notation. All annotations are optional; missing types are represented by `any()` when generating a specification. A function with no annotations generates no new `-spec`. Standard Erlang `-spec` declarations remain supported.
+Annotations are optional. Functions without types get no generated spec.
+Comments and untouched source text are retained; Angler leaves standard layout
+to an external formatter such as `erlfmt`.
 
-### Multiple function clauses
+See [example/example.erlx](example/example.erlx) for grouped exports, local
+annotations, record-name deduction, and overloaded specs. Run it with `make demo`.
 
-Each clause can have its own types. The transpiler collects one signature per clause and generates an overloaded specification, preserving relationships between arguments.
+## Quick start
 
-```erlang
-convert(X :: integer(), Y :: atom()) :: binary() ->
-    ...;
-convert(X :: binary(), Y :: integer()) :: binary() ->
-    ....
+Install Erlang/OTP with its compiler, then build from the checkout:
+
+```sh
+make
+make demo
 ```
 
-Generated specification:
+Transpile and compile your own file:
 
-```erlang
--spec convert(integer(), atom()) -> binary();
-             (binary(), integer()) -> binary().
+```sh
+bin/angler transpile path/to/example.erlx > example.erl
+# Optional; requires Rebar3 and downloads the erlfmt plugin on first use:
+rebar3 fmt -w example.erl
+erlc example.erl
 ```
 
-Missing annotations contribute `any()`. If every annotation is `any()`, no
-`-spec` is generated. Partially annotated overloaded clauses retain their
-`any()` fallbacks and produce a warning about potentially broad or overlapping
-alternatives. The CLI prints warnings to stderr while returning success.
-`angler:transpile_with_warnings(Source, Encoding)` returns
-`{ok, Output, Warnings}`; the simpler `transpile/1,2` API returns only output.
-
-An explicit `-spec` and **any inline function annotation** on the same name/arity
-are an error, even if their types appear identical or the annotations are all
-`any()`. The diagnostic identifies the function and both locations. Remove one
-source of function specifications. Explicit specs without inline annotations
-are preserved unchanged. Local annotations do not generate function specs and
-will remain allowed alongside explicit specs.
-
-For this milestone, only simple variable arguments may carry annotations;
-unannotated tuple, list, binary, map, and record patterns remain supported.
-Return annotations go before the optional guard. Types are validated using
-Erlang's type parser, including unions, records, remote types, and function
-types. Macro-expanded argument patterns cannot establish a generated arity and are
-rejected on annotated functions; use an explicit spec. Macro types and type
-constraints requiring explicit specifications are not implemented. Tokens removed from annotations leave comments and
-whitespace intact; generated specs currently add no newlines, without a
-source-line compatibility guarantee. Nested expression blocks
-and guard alternatives are distinguished from top-level function clauses.
-
-### Local export directive
-
-`_export` applies to the immediately following function (all its clauses):
-
-```erlang
-_export
-start() ->
-    x_initialize().
-
-x_initialize() ->
-    ok.
-```
-
-Generated Erlang:
-
-```erlang
--export([start/0]).
-
-start() ->
-    x_initialize().
-
-x_initialize() ->
-    ok.
-```
-
-Several `_export` directives can be collected into a generated export attribute.
-Existing standard `-export` declarations are preserved. There is **no**
-export-by-name convention. `_export` is lexically an Erlang variable, but its
-special meaning is restricted to the beginning of a top-level form. Only
-comments and whitespace may occur between the directive and its function;
-intervening module attributes, including `-spec`, are errors.
-
-#### Optional export tags
-
-A directive may optionally carry a **single atom tag**, in parentheses:
-
-```erlang
-_export(api)
-start() ->
-    ok.
-
-_export(gen_server)
-init(Args) ->
-    {ok, Args}.
-```
-
-Plain `_export` remains valid and belongs to an untagged group. A function has
-at most one tag; multiple tags and repeated directives are errors. Comments
-and whitespace remain the only permitted content between the complete
-directive and its function. Tags group output only: they do not change export
-visibility, validate behavior callbacks, or introduce runtime metadata.
-
-Generate one export attribute per group, with tagged groups labeled by comments:
-
-```erlang
-%% api
--export([start/0, stop/0]).
-
-%% gen_server
--export([init/1, handle_call/3]).
-```
-
-Groups follow first-seen order; functions within each group follow source order.
-The untagged group has no tag label. Existing standard export attributes remain
-intact, and entries already exported are not duplicated by generated groups.
-Generated comments may add lines; output can be normalized with erlfmt.
-Source-line preservation is not a requirement for transformed extended syntax.
-
-### Record fields and updates
-
-Variables with an explicit record annotation or an obvious local record binding
-support abbreviated access. See local record-name deduction below.
-
-```erlang
-get_name(P :: #person{}) :: string() ->
-    P.name.
-
-birthday(P :: #person{}) ->
-    P{age = P.age + 1}.
-```
-
-`P.name` becomes `P#person.name`; `P{age = ...}` becomes `P#person{age = ...}`.
-Ordinary Erlang record operations remain valid. Angler performs only the limited
-local record-name deduction described below; it does not check field types.
-
-### Local record-name deduction
-
-The following simple bindings establish a record name without a redundant
-annotation, in both module function bodies and snippets:
-
-```erlang
-P = #person{name = "Ada", age = 41},
-Older = P#person{age = 42},
-Next = Older{age = Older.age + 1},
-Alias = Next,
-Alias.name.
-```
-
-Recognized right-hand sides are direct `#record{...}` constructions,
-`Variable#record{...}` updates, abbreviated `Variable{...}` updates when that
-variable's record name is already known, and aliases of known record variables.
-These must be complete right-hand sides of simple, top-level `Variable = RHS`
-expression bindings. The mapping becomes available **after** that binding,
-resets at each top-level function clause or snippet, and never generates
-function specs. `_` does not introduce a binding.
-
-This is record-name deduction only. No deduction comes from function calls,
-field values, branches, macros, parenthesized expressions or nested patterns
-and bindings. Use explicit annotations in those cases. Deductions inside
-nested `case`/`fun` bodies are not propagated or analyzed. Existing shadowing
-limitations still apply; avoid shadowing annotated or deduced variable names.
-An explicit annotation for the same record is compatible (and retains its
-field constraints); a different record name or a non-record annotation is a
-conflict. Conflicting deduced bindings are errors too. No general type
-inference or field-type checking is introduced.
-
-### Local annotations for nested records
-
-```erlang
-city(P :: #person{}) :: string() ->
-    A :: #address{} = P.address,
-    A.city.
-```
-
-Default generated Erlang:
-
-```erlang
--spec city(#person{}) -> string().
-city(P) ->
-    A = P#person.address,
-    A#address.city.
-```
-
-Angler maintains a simple mapping from annotated or locally deduced variable names to record names within each top-level function clause. Local annotations update it from the annotation onward, and the environment resets at the next clause. Full lexical scope and shadowing analysis are out of scope; programmers should avoid shadowing annotated variables. Conflicting annotations of the same variable should be reported. Initially, only simple local variable annotations need support, not annotations deeply nested in patterns.
-
-By default local annotations are syntax hints: the generated Erlang does not retain their type assertions for a type checker.
-
-Local bindings must be `Variable :: Type = Expression`, with a simple variable
-at an expression boundary; annotations inside tuple/list patterns or anonymous
-function heads are not supported. Ordinary Erlang types are accepted as syntax
-hints, but only a direct record type such as `#person{}` enables shorthand.
-Re-annotating a variable with a different type is an error; repeating the same
-type is allowed. If neither an explicit annotation nor a supported local binding establishes a
-record name, abbreviated operations produce a diagnostic. No record definitions or field-type checking are needed
-by the transpiler; the standard compiler or shell checks actual record fields.
-
-Header annotations seed a fresh environment for each top-level function clause.
-Local annotations affect subsequent text within that clause (or the current
-snippet), including nested expressions, and are removed before function-spec
-conflict checks. They therefore remain usable alongside an explicit `-spec`.
-There is no branch-flow or shadowing analysis: avoid shadowing annotated names,
-and supply intermediate annotations for nested records. `P.address.city` is
-rejected; use `A :: #address{} = P.address, A.city` instead. The field atom must
-immediately follow its dot, as whitespace after a dot denotes an Erlang form
-terminator. Comments/whitespace elsewhere are retained. The current rewrite
-adds no newlines, but source-line preservation is not guaranteed.
-
-## Optional Eqwalizer support
-
-The default transpiler has no Eqwalizer dependency. A proposed `--eqwalizer` flag enables Eqwalizer-specific local type ascriptions. For example:
-
-```erlang
-A :: #address{} = get_address()
-```
-
-normally becomes `A = get_address()`; with Eqwalizer enabled it may become:
-
-```erlang
-A = ?CHECKED_CAST(get_address(), #address{})
-```
-
-The implementation must verify the exact supported Eqwalizer macro interface and include the required header as needed. This option must not change parsing or record-name resolution.
-
-## Implementation approach
-
-- Implementation language: Erlang.
-- Scanner: `erl_scan`, retaining token text, comments, and whitespace.
-- Translator: structured token rewriting, not regex replacement or a complete new parser.
-- Emitter: concatenate original text for untouched tokens; replace only recognized extended syntax and insert generated attributes.
-- Validate generated ordinary Erlang with the standard compiler.
-
-Suggested scanner call:
-
-```erlang
-erl_scan:string(Source, {1, 1},
-                [text, return_comments, return_white_spaces]).
-```
-
-Maintain two views: a lossless stream of text-bearing tokens (including whitespace and comments), and a filtered view of significant tokens for syntax recognition. Use the filtered view to drive transformations on the lossless stream. No separate formatter or original-source offset editor is planned for v1.
-
-Recognize top-level forms and clauses from token structure, not source indentation. Distinguish nested `fun`, `case`, `receive`, and other expressions from function heads. Keep the implementation intentionally limited rather than attempting comprehensive Erlang semantic analysis.
-
-Macros and macro expansions are assumed to contain **only standard Erlang syntax**. Ordinary macros and includes should continue to work; the order of preprocessing versus rewriting must be tested.
-
-### Suggested modules
-
-| Module | Responsibility |
-| --- | --- |
-| `ext_scan` | Tokenization and token views |
-| `ext_forms` | Top-level forms, functions and clauses |
-| `ext_types` | Function and local annotations |
-| `ext_records` | Abbreviated record operations |
-| `ext_exports` | `_export` |
-| `ext_specs` | Overloaded specifications |
-| `ext_emit` | Output with token/text preservation |
-| `ext_cli` | CLI and optional backends |
-
-Pipeline: tokenize; identify forms and clauses; collect types and exports; build per-clause record environments; rewrite extensions; insert attributes; emit ordinary Erlang.
-
-## Project layout and build synchronization
-
-Build mirroring is implemented by `angler build`. It treats
-`src_ex/` as the authoritative source tree and `src/` as the generated output
-mirror. Mapped output files may be overwritten during generation, so do not
-keep valuable edits only in generated files. Extra output files are preserved
-by default and removed only with an explicit `-d`/`--delete`. There is no output
-ownership manifest, staging tree, or transactional publication.
-
-Example:
-
-```text
-my_app/
-  rebar.config
-  src_ex/
-    server.erlx
-    protocol.erl
-    settings.json
-    include/types.hrl
-  src/
-    server.erl
-    protocol.erl
-    settings.json
-    include/types.hrl
-```
-
-`angler build` recursively mirrors the input tree:
-
-- `*.erlx` files are transpiled to corresponding `*.erl` files.
-- **Every other file** is copied byte-for-byte, regardless of extension (including `*.erl` and extensionless files).
-- The relative directory structure is preserved.
-- Colliding destinations, such as `foo.erl` and `foo.erlx` in the same input directory, are build errors.
-- Output files without corresponding inputs are extras: warn for each extra
-  and leave it untouched by default. `-d`/`--delete` removes extras and the
-  output directories made empty by that deletion, only after all generation
-  and copying operations succeed. Do not follow output symlinks when deleting.
-- `src_ex/` must exist; missing input is an error, not an instruction to empty `src/`.
-- Input/output locations must not overlap, and `src/` must not be a symlink.
-
-Angler handles incremental rebuilds using file modification times; GNU Make
-is not required. Missing or outdated mapped outputs are generated or copied;
-up-to-date outputs are left untouched. The agreed build options are:
-
-| Option | Behavior |
-| --- | --- |
-| No cleanup flag | Incrementally generate/copy mapped files; warn about extras and preserve them. |
-| `-d`, `--delete` | Also delete extras and resulting empty directories after generation/copying succeeds. |
-| `--clean` | Force regeneration/recopying of every mapped output, regardless of timestamps. Preserve extras unless `--delete` is also supplied. |
-| `--clean --delete` | Force regeneration and remove extras, producing an exact mirror on success. |
-
-Use `--clean` when the transpiler version or options change. It does **not**
-remove and recreate the entire output tree, and never implies `--delete`.
-
-**Warning policy:** warnings alone leave
-the exit status at zero. `--warnings-as-errors` applies to all transpiler
-warnings, including extras and partially annotated overloads: display the
-warnings and return a nonzero exit status. It does not imply deletion or grant
-permission to remove extras. Promotion changes the exit status, not the
-publication policy: successful writes and deletions requested with `--delete`
-remain, and successful single-file output is still emitted to stdout.
-
-**Failure semantics:** a generation, copy, or deletion failure returns nonzero.
-Generation/copy failures prevent the deletion phase, but already written
-outputs can remain: v1 provides no rollback or staging. Warning promotion is an
-exit-status policy, not a transactional guarantee. Without `--delete`, a
-successful build may retain extras; with `--delete`, successful synchronization
-leaves precisely the files mapped from `src_ex/`.
-
-Mapped files are planned before any output writes; name collisions and
-file/directory collisions fail that preflight. Input and output paths must be
-disjoint after dot-segment normalization. Symlinks in root paths, input trees,
-and mapped output paths are rejected. Extra output symlinks are warned about
-or unlinked as leaves, never followed. Special file types are unsupported.
-An existing output file/directory type conflict is an error, even with
-`--clean --delete`; remove the blocking entry explicitly. A mapped output
-hard-linked to its input is also rejected. Empty input directories are retained;
-obsolete empty output directories are warned about or pruned with `--delete`.
-
-Only missing or older mapped outputs are written, unless `--clean` is supplied.
-Timestamp comparison has filesystem-second precision; same-time content edits
-may require `--clean`. Extended source is validated on every build so warnings
-and errors are still reported when output writes are skipped. Unchanged plain
-files are not reread. Copies preserve their bytes and permission bits. Each
-file is published through a private sibling followed by rename, avoiding
-partial individual files; this does not make the whole build transactional.
-
-## CLI and snippet transpilation
-
-The implemented CLI uses the core API, with separate module and expression
-entry points:
+Write output to a different path from the input. Add the checkout's `bin/`
+directory to `PATH` to use `angler` from other directories. The launcher finds
+its compiled modules relative to itself; input paths are relative to your
+working directory. Run `make` or `rebar3 compile` again after changing Angler.
+
+The CLI targets Unix-like systems. Angler has no application dependencies or
+required services. Rebar3 is optional for building, and required for the
+formatting commands shown here; its configuration pins erlfmt 1.8.0.
+
+## Command-line use
 
 | Command | Purpose |
 | --- | --- |
-| `angler transpile path/to/file.erlx` | Transpile one file to stdout, including exports, specs, and record shorthand. |
-| `angler snippet` | Transpile local annotations and record shorthand in an expression sequence from stdin. |
-| `angler --version` | Print the version. |
-| `angler --help` (or `-h`) | Print usage and current limitations. |
-| `angler build [--clean] [--delete]` | Incrementally synchronize `src_ex/` into `src/`; extras are preserved by default. |
-
-`transpile` and `snippet` accept `--encoding utf8|latin1` (UTF-8 by default).
-Use `--` before filenames starting with `-`. File arguments are relative to the
-caller's working directory; input files are never changed. Capture output with
-shell redirection to a **different** path:
+| `angler transpile FILE` | Transpile a module file to stdout. |
+| `angler snippet` | Read an expression sequence from stdin and emit shell-ready Erlang. |
+| `angler build` | Mirror `src_ex/` into `src/`, transpiling `.erlx` files. |
+| `angler --help` / `angler --version` | Show usage / version. |
 
 ```sh
 angler transpile example.erlx > example.erl
-angler transpile --encoding latin1 -- -example.erlx > example.erl
-printf 'X = 40, X + 2.\n' | angler snippet
-```
-
-Snippet mode targets one expression sequence terminated by a period, ready
-for the Erlang shell. Empty or comment-only input is also preserved. It uses
-the same scanner/emitter as module transpilation, validates with
-`erl_parse:parse_exprs`, and never runs the module export pass or evaluates any
-code. Module declarations, function definitions, and `_export` directives
-are not supported in snippets. Ordinary variables named `_export` remain valid.
-
-The corresponding library APIs preserve the input representation:
-
-```erlang
-{ok, Output} = angler:snippet(<<"X = 40, X + 2.\n">>),
-{ok, Latin1Output} = angler:snippet(<<"42.">>, latin1).
-```
-
-Local annotations and abbreviated record operations are implemented in snippets:
-
-```sh
 printf 'P :: #person{} = get_person(), P.name.\n' | angler snippet
+angler build --input source --output generated
 ```
 
-This emits ordinary Erlang equivalent to
-`P = get_person(), P#person.name.` while retaining original whitespace and
-comments. Snippets never generate module-level specs or export attributes.
-The shell must already know record definitions; Angler does not inspect shell
-bindings. Ordinary `P#person.name` syntax also passes validation without requiring
-record definitions in the transpiler. Eqwalizer-specific casts remain deferred.
+Snippet mode accepts expressions terminated by a period, not module attributes
+or function definitions. It removes local annotations and rewrites record
+shorthand; it never evaluates code or generates exports/specs. The Erlang shell
+must already have any required variables and record definitions.
 
-On successful source commands, stdout contains only source bytes, with comments,
-encoding, BOMs, line endings, and EOF preserved. Diagnostics go to stderr, with
-file/stdin location where available. Exit codes are `0` for success, `1` for
-input/transformation/output errors, and `2` for usage errors. Input and
-transformation failures emit no partial source. Module transpilation remains
-token rewriting with type, export, and record passes; use `erlc` to validate the generated module.
+All three source commands accept `--encoding utf8|latin1` (default: UTF-8) and
+`--warnings-as-errors`. Use `--` before filenames starting with `-`.
+Diagnostics go to stderr; `transpile` and `snippet` write only source to stdout.
 
-Build accepts `--input DIR` and `--output DIR` (defaults: `src_ex` and `src`),
-`--clean`, `-d`/`--delete`, and `--encoding utf8|latin1` for extended source.
-Ordinary files, including `.erl`, are copied without decoding. All three source
-commands (`build`, `transpile`, `snippet`) accept `--warnings-as-errors`.
-Eqwalizer remains unimplemented.
+### Project builds
 
-```sh
-angler build
-angler build --input source --output generated --clean
-angler build --delete --warnings-as-errors
+In a consuming project, keep authoritative files in `src_ex/` and generated
+files in `src/`:
+
+```text
+src_ex/server.erlx       -> src/server.erl
+src_ex/protocol.erl      -> src/protocol.erl
+src_ex/include/types.hrl -> src/include/types.hrl
+src_ex/settings.json     -> src/settings.json
 ```
 
-The corresponding library API is `angler:build()` or
-`angler:build(#{input => "src_ex", output => "src", clean => false,
-                delete => false, encoding => utf8})`. It returns
-`{ok, Stats, Warnings}` with written/skipped/deleted file counters, or
-`{error, {Path, Module, Reason}, Warnings}`. Warnings pair their source/output
-path with `{Location, Module, Reason}`. The CLI applies warning promotion;
-the library returns warnings for the caller to handle.
+Every non-`.erlx` file is copied byte-for-byte. Builds preserve relative paths
+and write missing or older outputs. Extras in the output tree produce warnings
+and are preserved by default.
 
-### Emacs integration
-
-`angler-mode` is a major mode derived from the Erlang distribution's
-`erlang-mode`. The initial mode setup associates `.erlx` files, inherits
-Erlang's keymap, syntax table, indentation and navigation, and runs
-`erlang-mode-hook` followed by `angler-mode-hook`. Angler-aware indentation,
-function/clause movement and Imenu are implemented.
-
-Syntax-aware highlighting recognizes top-level `_export`, inline/local type
-annotations, and abbreviated record access/updates, including multiline types.
-Comments, strings, quoted literals and ordinary Erlang syntax retain inherited
-highlighting. Highlighting is lexical and does not infer record types or
-validate the code. It also tolerates incomplete syntax while editing.
-Customize `angler-directive-face`, `angler-operator-face` and
-`angler-field-face` to adjust the appearance; type text uses the standard
-`font-lock-type-face` alongside inherited Erlang builtin/literal faces.
-
-Indentation uses a temporary, same-width Erlang parser view with annotations
-and shorthand masked out; it applies only leading-whitespace changes to the
-source. It handles typed heads, guards, multiple clauses, local annotations,
-record shorthand and multiline type continuations, while preserving literal
-string contents. Standard Erlang indentation settings such as
-`erlang-indent-level`, `erlang-indent-guard`, `erlang-argument-indent`,
-`indent-tabs-mode` and `tab-width` still apply. No transpiler process is needed
-for indentation or navigation. Incomplete input is handled on a best-effort
-basis, retaining indentation when the parent parser cannot determine it.
-
-| Editing command | Binding |
+| Option | Effect |
 | --- | --- |
-| Indent line / region | `TAB` / `C-M-\` |
-| Newline and indent | `RET` |
-| Beginning / end of function | `C-M-a` / `C-M-e` |
-| Beginning / end of clause | `C-c M-a` / `C-c M-e` |
-| Select clause | `C-c M-h` |
-| Indent current function | `C-c C-q` |
-| Function name/arity index | `M-x imenu` |
-| Copy transpiled expression region | `C-c C-r` (`angler-copy-snippet`) |
-| Send transpiled expression region | `C-c C-e` (`angler-send-snippet`) |
-| Transpile entire buffer | `C-c C-t` (`angler-transpile-buffer`) |
-| Build project output tree | `C-c C-k` (`angler-build`) |
+| `--input DIR`, `--output DIR` | Override `src_ex/` and `src/`. |
+| `--clean` | Regenerate/re-copy all mapped files, regardless of timestamps. |
+| `-d`, `--delete` | Delete extras after generation/copying succeeds. |
+| `--clean --delete` | Force regeneration and remove extras. |
+| `--warnings-as-errors` | Display warnings and return a failure status. |
 
-Function navigation stops at the function head, leaving preceding `_export`
-and `-spec` text before it. Imenu groups all clauses of a function into one
-entry and counts arguments after masking inline annotations. Its markers
-refer to the original source buffer, including for quoted function names.
-Macros are not expanded, so macro-generated or incomplete heads may not have
-index entries. Erlang's electric punctuation auto-newline/clause-generation
-features are disabled locally because they call its original parser directly;
-punctuation inserts normally, bit-syntax pairing is retained, and `TAB`/`RET`
-provide Angler-aware indentation. Ordinary Erlang-mode buffers are unaffected.
+Use `--clean` after changing the transpiler version or options. It does not
+imply deletion. Warning promotion changes the exit status, not the output:
+successful writes and explicitly requested deletions remain.
 
+Do not edit generated files as your only copy. In this repository, `src/`
+contains Angler's handwritten implementation; use another output directory
+when trying build mirroring here. See [build details](#build-details) for
+collision checks and failure behavior.
 
-Ensure the Erlang distribution's `erlang.el` is on Emacs's `load-path`. If your
-installation has not configured this already, add its `lib/tools-VERSION/emacs`
-directory (or your distribution's Erlang-mode package directory). Then load
-Angler using your checkout's path:
+## Emacs
+
+Ensure the Erlang distribution's `erlang.el` is on Emacs's `load-path`, then
+load the mode and point it at the built CLI:
 
 ```elisp
 ;; Only needed if erlang.el is not already on load-path:
@@ -647,129 +151,303 @@ Angler using your checkout's path:
 (setq angler-program "/path/to/angler-lang/bin/angler")
 ```
 
-New `.erlx` buffers select `angler-mode` automatically. For an already open
-buffer, use `M-x angler-mode`. The mode leaves ordinary `.erl` associations and
-the source buffer contents unchanged. Customize Angler-specific settings in
-`angler-mode-hook`; existing `erlang-mode-hook` customization still applies.
-The copy helper can also be used without enabling the major mode.
+New `.erlx` buffers select `angler-mode` automatically; use `M-x angler-mode`
+for an already open buffer. The mode inherits Erlang settings and hooks, with
+Angler-aware highlighting, indentation, function/clause navigation, and Imenu.
+Ordinary `.erl` buffers are unaffected.
 
-Select an expression sequence and run `M-x angler-copy-snippet` to copy the
-transpiled output to the kill ring, or `M-x angler-send-snippet` to send it to a
-live Erlang shell. Both commands accept expressions, not module attributes or
-function definitions, and use UTF-8 when communicating with the CLI.
+| Command | Binding |
+| --- | --- |
+| Copy transpiled expression region | `C-c C-r` (`angler-copy-snippet`) |
+| Send transpiled expression region to an Erlang shell | `C-c C-e` (`angler-send-snippet`) |
+| Transpile the entire buffer into a separate Erlang buffer | `C-c C-t` (`angler-transpile-buffer`) |
+| Build the project's output tree | `C-c C-k` (`angler-build`) |
 
-Start a shell with `M-x erlang-shell` first. Sending chooses the sole live Erlang
-shell automatically, prompts if several exist, or uses `angler-shell-buffer`
-when configured. `C-u C-c C-e` explicitly chooses a shell. Pending shell input
-must be finished or cleared first; the command does not overwrite it or start
-a shell implicitly. Shell variables and record definitions must already exist
-as needed. Sending uses comint input/history; it leaves the source and kill
-ring unchanged, and sends nothing when transpilation fails.
+Start a shell with `M-x erlang-shell` before sending expressions. Copy/send
+accept expressions, not function definitions; use buffer transpilation for a
+whole module. Buffer and region commands include unsaved edits without changing
+the source. Project builds read files on disk, so save edits first.
 
-`M-x angler-transpile-buffer` reads the entire current buffer, including unsaved
-edits, without saving it. Successful output goes into a separate read-only
-Erlang buffer named `*Angler transpilation: SOURCE*`; source encoding metadata
-is retained for saving that output later. Failure leaves previous successful
-output intact. Use this command for module text and function definitions.
-
-Source-command diagnostics appear in `*Angler diagnostics*`. For file-backed
-source buffers, snippet-relative positions are adjusted to the original region,
-and `next-error` (`M-g n`) visits the source buffer. Diagnostics for buffers
-without filenames are displayed as text with buffer-relative positions.
-Warnings are displayed even on success. Setting `angler-warnings-as-errors`
-makes nonzero warning outcomes fail without replacing the kill ring or sending
-code to a shell.
-
-`M-x angler-build` runs an asynchronous `angler build` in
-`angler-compilation-mode`, with clickable source diagnostics and normal
-`next-error` navigation. It generates the output tree; it does not compile
-the generated Erlang into BEAM files. Builds read files on disk and do not
-save buffers: save edits first. Root discovery prefers a containing `src_ex`
-project, then Emacs's project root, a containing `rebar.config`, or the current
-directory. Set `angler-project-root` or use `C-u C-c C-k` to choose explicitly.
-`angler-build-arguments` supplies additional CLI arguments, such as `--input`,
-`--output`, `--clean` or `--delete`; every argument is shell quoted. No cleanup
-or deletion option is added automatically. Build failures retain whatever
-filesystem changes the CLI already completed, as described in Build mirroring.
-
-Build Angler with Make or Rebar3 first and ensure `erl` is available to Emacs
-through `PATH`. Use an absolute `angler-program` path or an executable on
-`PATH`, since project builds run from the project root. Settings may be made
-buffer-local in `angler-mode-hook` for different projects.
-
-`make test-emacs` discovers the parent mode under Erlang's tools application.
-If it is installed elsewhere, set `ERLANG_EMACS_DIR=/path/to/erlang-mode` when
-running the target. `EMACS=/path/to/emacs` selects the Emacs executable.
-
-A Rebar3 pre-compile hook can run `angler build`; Rebar3 integration is optional rather than a required part of the transpiler.
-
-## Compatibility and tests
-
-**Vanilla Erlang identity is a central requirement.** For supported source files containing no extensions, the preferred invariant is:
-
-```erlang
-emit(scan(Source)) =:= Source.
-```
-
-Verify byte-for-byte round trips where possible, including whitespace, comments, encoding, line endings, and EOF behavior. As a fallback diagnostic, compare scanned token sequences with location metadata removed, retaining comments and values. Note that source-location-sensitive macros such as `?LINE` warrant special tests.
-
-Other tests should cover inline types, overloaded clauses, incomplete annotations, `_export`, record fields and updates, local annotations, comments and strings containing extension-like text, macros, compiler acceptance, and optional Eqwalizer output. Directory tests should cover copied non-`.erlx` files, nested paths, collisions, deleted inputs and output cleanup, incremental timestamps, and failed-build behavior. Snippet tests should cover stdin/stdout, local annotations, diagnostics, and shell-ready output.
-
-Generated ordinary Erlang should be idempotent under transpilation:
-
-```text
-transpile(transpile(Source)) == transpile(Source)
-```
-
-Benchmark scanner, rewriting, emitter, total time, and startup cost on modules of varying sizes before considering a different implementation language.
+Diagnostics appear in `*Angler diagnostics*`; file-backed buffers support
+`next-error` navigation. Builds use `angler-compilation-mode`. Emacs must be
+able to find `erl` through `PATH`. See [editor details](#editor-details) for
+settings and shell selection.
 
 ## Known limitations
 
-- `?FILE` and `?LINE` are left to Erlang's preprocessor. The transpiler does not
-  replace them with values relative to the original `.erlx` source. Such
-  handling, including macros, includes, and `-file` attributes, is postponed.
-- Byte-for-byte preservation applies to supported ordinary Erlang without
-  extensions. Transformed extended syntax has no source-line preservation
-  guarantee. Compiler diagnostics, stack traces, and `?LINE` can refer to the
-  generated layout; `?FILE` normally identifies the generated `.erl` file.
-- Running erlfmt on generated output may change line numbers further. Users
-  who depend on its current line layout should avoid formatting that output.
-  Avoiding erlfmt does not establish original `.erlx` filenames or guarantee
-  original source line numbers. Source mapping remains future work.
+- **No general type inference or type checking.** Only limited local record-name
+  deduction is performed. Use Erlang's compiler and a separate type checker.
+  Eqwalizer-specific output is not implemented yet.
+- **Macros contain ordinary Erlang only.** Angler does not expand macros or
+  includes. Macro-generated heads/types have additional restrictions described
+  below; `_export` is not supported inside preprocessor conditionals.
+- **Record tracking is local and limited.** There is no branch-flow or full
+  lexical-scope analysis; avoid shadowing annotated or deduced variable names.
+  Annotated argument patterns must be simple variables.
+- **No source mapping.** `?FILE` and `?LINE` are left to Erlang's preprocessor
+  and can refer to the generated file/layout. Diagnostics and stack traces can
+  likewise refer to generated code. Avoiding erlfmt does not guarantee original
+  source positions; formatting can change line numbers further.
+- **OTP compatibility follows the runtime.** Angler uses that OTP's scanner and
+  parser. Passing newer syntax through module bodies does not establish support
+  for it in function heads, annotations, or snippet parsing. Validate generated
+  code with the OTP version you target.
+- **Native and tuple records are distinct.** Angler's abbreviated operations
+  target tuple-based records. OTP 29's native-record operations such as
+  `P#_.age` and `P#_{age = 42}` are standard Erlang syntax, not Angler shorthand.
 
-## Deliberately out of scope for v1
+Supported ordinary Erlang without extensions is preserved byte-for-byte.
+Transformed code has no line-number or standard-formatting guarantee. Applying
+Angler again to generated ordinary Erlang leaves it unchanged.
 
-- New conditional expressions such as `cond`.
-- General type inference or type checking; only limited local record-name deduction is supported.
-- General lexical scope analysis or support for shadowing annotated variables.
-- Extended syntax inside macro definitions or expansions.
-- Automatic exports based on function naming.
-- A formatter or sophisticated optimization passes.
-- Supporting every unusual Erlang construct with extended syntax.
+## Syntax reference
+
+### Exports
+
+`_export` marks the immediately following function, including all clauses.
+Only comments and whitespace may intervene; attributes (including `-spec`),
+repeated directives, and multiple tags are errors.
+
+```erlang
+_export          % Unlabeled group.
+start() -> ok.
+
+_export(api)     % A single atom tag; quoted atoms are allowed too.
+stop() -> ok.
+```
+
+Groups follow first-seen order, functions within a group follow source order,
+and tagged groups receive a comment label. Generated groups are separated by
+blank lines and inserted after `-module`, before other attributes/includes.
+Tags only group output; they add no runtime metadata or behavior validation.
+
+Existing literal, unconditional `-export` entries are preserved and deduplicated
+against generated ones. Exports hidden in includes, macros, or conditionals
+cannot be deduplicated this way. There is no export-by-name convention.
+Macro-generated names, arguments, or guards on marked functions are unsupported;
+use standard export attributes there and inside `-ifdef`/`-ifndef`/`-if` branches.
+
+### Function types
+
+Argument annotations go after simple variables; return annotations go before
+an optional guard. Types use Erlang's type syntax, including unions, remote
+types, records, and function types.
+
+```erlang
+encode(N :: integer()) :: binary() when is_integer(N) ->
+    integer_to_binary(N);
+encode(B :: binary()) :: binary() when is_binary(B) ->
+    B.
+```
+
+This generates one overloaded spec:
+
+```erlang
+-spec encode(integer()) -> binary(); (binary()) -> binary().
+```
+
+Missing types contribute `any()`. If all types are `any()` (or absent), no spec
+is generated. Partially annotated overloaded clauses retain their `any()`
+fallbacks and produce a warning about broad or overlapping alternatives.
+Unannotated argument patterns remain valid.
+
+An explicit `-spec` plus **any inline function annotation** for the same
+name/arity is an error, even for identical types or `any()`. Local annotations
+are independent and remain usable with explicit specs. Macro-expanded argument
+patterns cannot establish generated arity; use an explicit spec. Macro types
+and constraints requiring explicit specifications are not implemented.
+
+### Record shorthand and local annotations
+
+`P.field` and `P{field = Value}` require a known tuple-record name. A direct
+record annotation on an argument or local variable establishes that name:
+
+```erlang
+city(P :: #person{}) :: string() ->
+    A :: #address{} = P.address,
+    A.city.
+```
+
+The local annotation is erased; the body becomes equivalent to
+`A = P#person.address, A#address.city`. Local hints do not emit type checks or
+function specs. Other Erlang types can be used as hints, but only direct record
+types enable record shorthand.
+
+Simple top-level bindings also establish record names without annotations:
+
+```erlang
+P = #person{age = 41},          % Direct construction.
+Older = P#person{age = 42},     % Ordinary record update.
+Next = Older{age = 43},         % Shorthand update of a known record.
+Alias = Next,                  % Alias of a known record variable.
+Alias.age.
+```
+
+Deduction applies only to complete right-hand sides of simple `Variable = RHS`
+bindings. It does not follow calls, field values, branches, macros, parenthesized
+expressions, or nested patterns/bindings. `_` establishes no binding. The mapping
+becomes available after the binding and resets at each top-level function clause
+or snippet. Argument annotations seed each clause's environment; local hints
+apply from their position onward, including within nested expressions.
+
+Local annotations require `Variable :: Type = Expression` at an expression
+boundary. Annotations within tuple/list patterns or anonymous-function heads
+are unsupported. Repeating the same type is allowed; conflicting annotations
+or deduced record names produce errors. A compatible record annotation retains
+its field constraints. Actual field definitions/types are checked by Erlang's
+compiler or shell, not by Angler.
+
+Chained shorthand such as `P.address.city` is rejected; use an intermediate
+annotated variable as above. The field atom must immediately follow the dot:
+whitespace after a dot denotes an Erlang form terminator.
+
+## Reference and development
+
+### Library API
+
+Build with Make or Rebar3, then start `erl -pa _build/default/lib/angler/ebin`:
+
+```erlang
+{ok, Erlang} = angler:transpile(Source),
+{ok, Erlang, Warnings} = angler:transpile_with_warnings(Source, utf8),
+{ok, Expressions} = angler:snippet(Snippet),
+{ok, Stats, BuildWarnings} = angler:build(#{input => "src_ex", output => "src"}).
+```
+
+`transpile/2` and `snippet/2` accept `utf8` or `latin1`; one-argument forms
+use UTF-8. APIs preserve binary versus Unicode character-list representation.
+`transpile/1,2` discard warnings; use `transpile_with_warnings/2` to retain them.
+Transformation errors return `{error, Reason}`, commonly
+`{Location, Module, Description}`; use the indicated module's `format_error/1`.
+
+`build/0` uses defaults. `build/1` accepts `input`, `output`, `clean`, `delete`,
+and `encoding`; it returns `{ok, Stats, Warnings}` or
+`{error, {Path, Module, Reason}, Warnings}`. Stats count written, skipped, and
+deleted files. Build warnings pair a path with `{Location, Module, Reason}`.
+Warning promotion is a CLI policy; library callers handle warnings themselves.
+
+### Build details
+
+Input must exist and input/output paths must be disjoint after normalization.
+Mapped file/directory and destination collisions (for example `foo.erl` beside
+`foo.erlx`) are checked before writes. Root, input-tree, and mapped-output
+symlinks are rejected, as are special files and outputs hard-linked to inputs.
+Existing file/directory type conflicts require explicit removal, even with
+`--clean --delete`.
+
+Timestamp comparisons have filesystem-second precision; same-time edits may
+require `--clean`. Extended source is validated on every build even if its
+output is current; unchanged plain files are not reread. Copies preserve bytes
+and permission bits. Empty input directories are retained.
+
+Deletion starts only after generation/copying succeeds. Extra symlinks are
+unlinked as leaves, never followed; obsolete empty directories are pruned with
+`--delete`. Each output is published through a private sibling and rename,
+but the whole build is not transactional: failures can leave earlier writes
+or deletions in place. Warnings alone exit successfully unless promoted.
+
+CLI exit codes are `0` for success, `1` for source/I/O errors or promoted
+warnings, and `2` for usage errors. Failed single-file transformations emit no
+partial source; promoted warnings still allow successful source output.
+
+### Editor details
+
+Standard Erlang indentation settings apply, including `erlang-indent-level`,
+`erlang-indent-guard`, and `erlang-argument-indent`. `TAB`, `RET`, `C-M-a`,
+`C-M-e`, `C-c M-a`, `C-c M-e`, `C-c M-h`, `C-c C-q`, and Imenu use Angler-aware
+indentation/navigation. Navigation stops at function heads, after preceding
+exports/specs. Electric punctuation features that call the parent parser
+directly are disabled locally. Highlighting is lexical; incomplete code is
+handled on a best-effort basis.
+
+Sending chooses the sole live Erlang shell, prompts if several exist, or uses
+`angler-shell-buffer`; `C-u C-c C-e` explicitly chooses one. Pending shell input
+must be cleared or finished first. Sending leaves the kill ring unchanged;
+failed transpilation sends nothing. Buffer transpilation uses a separate
+read-only output buffer and retains previous successful output on failure.
+
+`angler-warnings-as-errors` makes warning outcomes fail in editor commands.
+Set `angler-project-root` or use `C-u C-c C-k` to choose a build directory;
+a containing `src_ex/` project is preferred by automatic discovery, followed
+by Emacs's project root, a containing `rebar.config`, or the current directory.
+`angler-build-arguments` supplies additional CLI flags. Cleanup/deletion is
+never enabled automatically. Settings can be buffer-local in `angler-mode-hook`,
+which runs after `erlang-mode-hook`.
+
+### Implementation and encoding
+
+The implementation uses Erlang's `erl_scan` with text, comments, and whitespace
+retained, then structured token rewriting. It does not expand macros or parse
+and validate the complete generated module; use `erlc` for that. Function-head
+and type recognition use `erl_parse`; snippet output is checked with
+`erl_parse:parse_exprs` without evaluation.
+
+The pipeline is scanning, record/local-annotation rewriting, function-spec
+generation, export generation, and emission. `ext_scan` provides a complete
+token stream plus indexed significant tokens; `ext_forms` and `ext_syntax`
+provide structural traversal. `ext_records`, `ext_types`, and `ext_exports`
+perform the transformations; `ext_emit` concatenates token text. `ext_build`
+and `ext_cli` provide project synchronization and command-line entry points.
+
+Binary input defaults to UTF-8, with an initial UTF-8 BOM retained separately.
+Use the encoding option for Latin-1; encoding comments do not select it
+automatically. Character lists contain Unicode code points. UTF-16/UTF-32 and
+invalid encoded bytes are unsupported; decoding errors return
+`{error, {invalid_encoding, Encoding}}`. Lexical failures retain `erl_scan`'s
+location/module/description information. Untouched text retains comments,
+line endings, escapes, and EOF layout. Generated fragments can add new lines.
+
+### Development commands
+
+```sh
+make                    # compile Angler
+make demo               # transpile, compile, and run example/example.erlx
+make test               # six EUnit suites plus Python CLI/build tests
+make test-emacs         # optional Emacs ERT tests
+make fmt                # rebar3 fmt -w for the configured file set
+make clean              # remove _build
+
+rebar3 compile
+rebar3 shell
+rebar3 eunit             # Erlang suites only
+rebar3 as fast compile   # omit debug information
+rebar3 fmt --check
+```
+
+Tests require EUnit and Python 3; editor tests also require Emacs and Erlang's
+`erlang.el`. Rebar3 was tested with 3.24.0. Both build tools use
+`_build/default/lib/angler/ebin`. `rebar.config` selects the six EUnit suites
+explicitly so fixture modules are not treated as suites. `make fmt` formats
+its configured source/test/snippet set; use `rebar3 fmt -w FILE` for other files.
+
+For editor tests, override `EMACS` or `ERLANG_EMACS_DIR` if automatic discovery
+does not find your installation. The prepared cloud environment activates its
+local OTP installation with `. /workspace/.angler-tools/activate.sh`.
+
+Tests cover lossless round trips, idempotence, rewrites, diagnostics, generated
+code compilation/execution, CLI behavior, build mirroring, and editor commands.
+The OTP 29 [native-record probe](example/native_probe.erlx) is a separate manual
+compatibility example; it is not part of the OTP 27 test suite.
 
 ## Development milestones
 
-1. [x] **Lossless round-trip (implemented):** scanner and emitter; byte-for-byte preservation with documented encoding boundaries.
-2. [x] **Exports (implemented):** plain and tagged `_export` directives and generated export groups.
-3. [x] **Snippet and CLI (implemented):** stdin/stdout expression validation and preservation, single-file transpilation, and basic Emacs Erlang-mode integration. Originally moved ahead of types and records; record snippet rewriting is now implemented.
-4. [x] **Function types (implemented):** inline annotations and multi-clause overloaded `-spec` generation.
-5. [x] **Records (implemented):** local annotations, field access, updates, and limited local record-name deduction, including in snippet mode.
-6. [x] **Build mirroring (implemented):** recursive synchronization, arbitrary-file copying, timestamps, collision detection, default warnings for extras, opt-in `-d`/`--delete`, force regeneration with `--clean`, and `--warnings-as-errors`.
-7. [x] **Emacs support (implemented):** an `angler-mode` major mode derived from the Erlang distribution's `erlang-mode`, with `.erlx` association, highlighting, indentation and navigation for extended syntax; source-preserving transpile/copy/send commands and compilation integration, covered by ERT tests. Mode setup, syntax highlighting, indentation, function/clause navigation, Imenu, buffer transpilation, copy/send snippet commands and asynchronous project builds are implemented and tested, including a live Erlang-shell smoke test.
-8. [ ] **Eqwalizer option:** checked local annotations behind an explicit flag.
-9. [ ] **Integration:** golden tests, compilation tests, diagnostics, optional Rebar3 hook, documentation, and benchmarks.
+1. [x] **Lossless round-trip:** scanner/emitter and encoding boundaries.
+2. [x] **Exports:** plain and tagged directives, grouped export attributes.
+3. [x] **Snippet and CLI:** expression preprocessing and single-file commands.
+4. [x] **Function types:** inline annotations and overloaded spec generation.
+5. [x] **Records:** shorthand, local hints, and limited record-name deduction.
+6. [x] **Build mirroring:** incremental copying/transpilation, cleanup flags,
+   and warning promotion.
+7. [x] **Emacs support:** major mode, highlighting, indentation/navigation,
+   copy/send/transpile commands, and asynchronous project builds.
+8. [ ] **Eqwalizer option:** preserve local type assertions as checked casts
+   behind an explicit flag. The macro interface and supported annotation
+   positions still need to be settled; there is currently no `--eqwalizer` flag.
+9. [ ] **Integration:** further integration hardening, an optional Rebar3 hook,
+   and benchmarks. Golden tests, compilation tests, diagnostics, and the
+   documentation already exist and will continue to improve.
 
-## Open design decisions
-
-1. Resolved for Function types: only simple variable patterns may carry inline annotations initially.
-2. Resolved for Function types: retain `any()` fallbacks and warn for incomplete overloaded signatures; use an explicit spec for precise contracts.
-3. Resolved: explicit `-spec` plus inline function annotations on the same name/arity is an error, including identical types. Local annotations are independent.
-4. Resolved for milestone 2: comments/whitespace may intervene between `_export` and its function; module attributes may not.
-5. Which local annotation positions support checked Eqwalizer casts.
-6. Source-relative `?FILE`/`?LINE` handling and source mapping are postponed; see Known limitations. Ordinary Erlang round trips remain lossless, while transformed extended syntax has no line-number guarantee.
-
-These decisions should not block the initial scanner/emitter prototype.
-
-## Design principle
-
-Prefer small, explicit, predictable transformations over compiler sophistication. Angler should help Erlang programmers write and read ordinary Erlang programs with less ceremony, while leaving semantics and verification to the existing Erlang toolchain.
+General type inference, type checking, a formatter, optimization passes, and
+exports based on naming conventions are outside the current scope. A friendlier
+conditional syntax is an idea under consideration, not an implemented feature
+or committed milestone. Source mapping remains postponed.
