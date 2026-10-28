@@ -1,0 +1,86 @@
+%% A runnable tour of Angler's currently supported syntax.
+%% From the project root, after `make`:
+%%   mkdir -p _build/example
+%%   bin/angler transpile example/example.erlx > _build/example/example.erl
+%%   erlc -Werror -o _build/example _build/example/example.erl
+%%   erl -noshell -pa _build/example -eval 'ok = example:start(), ok = example:stop(), halt().'
+%% Optionally format the generated file with:
+%%   rebar3 fmt -w _build/example/example.erl
+
+-module(example).
+
+-record(address, {city}).
+-record(person, {name, age, address}).
+
+%% Ordinary Erlang macros remain supported.
+-define(INITIAL_AGE, 41).
+
+_export % Adds start/0 to the generated export attribute.
+start() :: atom() -> % Generates -spec start() -> atom().
+    %% A direct construction establishes P's record name without an annotation.
+    P = #person{
+        name = "Ada",
+        age = ?INITIAL_AGE,
+        address = #address{city = "Rome"}
+    },
+
+    "Ada" = name(P),
+    "Rome" = city(P),
+
+    %% Function return values are not deduced; this annotation is needed.
+    Older :: #person{} = birthday(P),
+    42 = Older.age, % Becomes Older#person.age.
+    41 = P.age, % Becomes P#person.age; the original record is unchanged.
+
+    %% Aliases inherit an already known record name.
+    Alias = Older,
+    "Ada" = Alias.name,
+
+    %% An abbreviated update establishes Next's record name as well.
+    Next = Alias{age = Alias.age + 1},
+    43 = Next.age,
+
+    %% Ordinary Erlang updates also establish a record name.
+    Explicit = Next#person{age = 44},
+    44 = Explicit.age,
+
+    %% Each encode/1 clause contributes a signature to one overloaded spec.
+    <<"42">> = encode(42),
+    <<"hello">> = encode(<<"hello">>),
+
+    %% Explicit specs can coexist with local annotations.
+    "Ada" = explicit_name(P),
+
+    %% Extension-like text in strings is left alone.
+    "P.name, P{age = 1}, _export, ::" = literal_text(),
+    ok.
+
+_export
+stop() :: atom() ->
+    ok.
+
+%% Generates -spec name(#person{}) -> string().
+name(P :: #person{}) :: string() ->
+    P.name.
+
+birthday(P :: #person{}) :: #person{} ->
+    P{age = P.age + 1}.
+
+city(P :: #person{}) :: string() ->
+    %% Field values are not deduced: annotate the intermediate record.
+    A :: #address{} = P.address,
+    A.city.
+
+encode(N :: integer()) :: binary() when is_integer(N) ->
+    integer_to_binary(N);
+encode(B :: binary()) :: binary() when is_binary(B) ->
+    B.
+
+%% An explicit spec replaces inline function annotations, not local hints.
+-spec explicit_name(#person{}) -> string().
+explicit_name(P) ->
+    Local :: #person{} = P,
+    Local.name.
+
+literal_text() :: string() ->
+    "P.name, P{age = 1}, _export, ::".
