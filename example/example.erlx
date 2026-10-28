@@ -1,14 +1,9 @@
-%% Four functions, two export groups, and ordinary Erlang underneath.
-%% After `make`, from the project root:
-%%   mkdir -p _build/example
-%%   bin/angler transpile example/example.erlx > _build/example/example.erl
-%%   erlc -Werror -o _build/example _build/example/example.erl
-%%   erl -noshell -pa _build/example -eval 'P = example:new(), {person, "Ada", 43} = example:birthday(P), <<"42">> = example:encode(42), P = example:identity(P), halt().'
-%% Optionally format the output: `rebar3 fmt -w _build/example/example.erl`.
+%% Showcasing the features of the transpiler.  See end of file for how to build and run.
+
 -module(example).
 -record(person, {name, age}).
 
-_export(people) % Groups `new/0` and `birthday/1` under `%% people`.
+_export(people) % Adds `new/0` to the generated `-export` under the comment `%% people`.
 new() -> % No annotations: no `-spec` is generated.
     P = #person{name = "Ada", age = 41}, % Deduces `P`'s record type.
     Alias = P, % Aliases inherit that type.
@@ -16,17 +11,26 @@ new() -> % No annotations: no `-spec` is generated.
     42 = Older.age, % Becomes `Older#person.age`.
     Older.
 
-_export(people)
+_export(people) % Adds `birthday/1` to the generated `-export` under the comment `%% people`.
 birthday(P :: #person{}) :: #person{} -> % Emits `-spec birthday(#person{}) -> #person{}.`
     P{age = P.age + 1}. % Becomes `P#person{age = P#person.age + 1}`.
 
-_export(values) % Groups `encode/1` and `identity/1` under `%% values`.
+_export(values) % Adds `encode/1` to the generated `-export` under the comment `%% values`.
 %% Emits one overloaded spec: `-spec encode(integer()) -> binary(); (binary()) -> binary().`
 encode(N :: integer()) :: binary() when is_integer(N) ->
     integer_to_binary(N);
 encode(B :: binary()) :: binary() when is_binary(B) ->
     B.
 
-_export(values)
+_export(values) % Adds `identity/1` to the generated `-export` under the comment `%% values`.
 identity(Value) -> % Unannotated arguments and return: no `-spec` is generated.
     Value.
+
+%% # HOW TO BUILD AND RUN
+%%
+%% After `make`, from the project root:
+%%   mkdir -p _build/example
+%%   bin/angler transpile example/example.erlx > _build/example/example.erl
+%%   erlc -Werror -o _build/example _build/example/example.erl
+%%   erl -noshell -pa _build/example -eval 'P = example:new(), {person, "Ada", 43} = example:birthday(P), <<"42">> = example:encode(42), P = example:identity(P), halt().'
+%% Optionally format the output: `rebar3 fmt -w _build/example/example.erl`.
