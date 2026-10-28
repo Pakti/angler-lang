@@ -16,11 +16,11 @@
 -export([handle_cast/2]).
 
 _export(api) % Adds start/0 to the export group labeled %% api.
-start() :: {ok, pid()} | {error, term()} -> % Emits -spec start() -> {ok, pid()} | {error, term()}.
+start() -> % No type annotations: no -spec is generated.
     gen_server:start_link({local, ?MODULE}, ?MODULE, [], []).
 
 _export(api) % Adds stop/0 to the same export group.
-stop() :: ok -> % Emits -spec stop() -> ok.
+stop() ->
     %% Function results need an explicit local record annotation, erased in output.
     P :: #person{} = gen_server:call(?MODULE, birthday),
     Alias = P, % Aliases inherit the known record name.
@@ -31,7 +31,7 @@ stop() :: ok -> % Emits -spec stop() -> ok.
     gen_server:stop(?MODULE).
 
 _export(gen_server) % Adds init/1 to the export group labeled %% gen_server.
-init(Args :: list()) :: {ok, #person{}} -> % Emits -spec init(list()) -> {ok, #person{}}.
+init(Args) ->
     [] = Args,
     P = #person{ % Direct construction establishes P's record name.
         name = "Ada",
@@ -41,14 +41,13 @@ init(Args :: list()) :: {ok, #person{}} -> % Emits -spec init(list()) -> {ok, #p
     {ok, P}.
 
 _export(gen_server) % Adds handle_call/3 to the same export group.
-%% Emits -spec handle_call(atom(), any(), #person{}) -> {reply, #person{}, #person{}}.
-%% The unannotated _From defaults to any() in this otherwise typed head.
-handle_call(Request :: atom(), _From, State :: #person{}) :: {reply, #person{}, #person{}} ->
+%% Emits -spec handle_call(any(), any(), #person{}) -> any().
+%% Only State needs a type for record shorthand; other types default to any().
+handle_call(Request, _From, State :: #person{}) ->
     birthday = Request,
     Next = State{age = State.age + 1}, % Becomes State#person{age = State#person.age + 1}.
     {reply, Next, Next}.
 
-%% No argument or return annotations: no -spec is generated.
 handle_cast(_Request, State) ->
     {noreply, State}.
 
