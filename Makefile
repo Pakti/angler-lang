@@ -14,7 +14,8 @@ all:
 test: all
 	mkdir -p $(TEST_BUILD)
 	$(ERLC) -Werror +debug_info -pa $(BUILD) -o $(TEST_BUILD) test/*.erl
-	$(ERL) -noshell -pa $(BUILD) $(TEST_BUILD) -eval 'case eunit:test([ext_roundtrip_tests, ext_exports_tests, ext_snippet_tests, ext_types_tests, ext_records_tests, ext_build_tests], [verbose]) of ok -> halt(0); _ -> halt(1) end.'
+	# -pa prepends paths: put freshly compiled application modules first.
+	$(ERL) -noshell -pa $(TEST_BUILD) -pa $(BUILD) -eval 'case eunit:test([ext_roundtrip_tests, ext_exports_tests, ext_snippet_tests, ext_types_tests, ext_records_tests, ext_build_tests], [verbose]) of ok -> halt(0); _ -> halt(1) end.'
 	$(PYTHON) test/cli_test.py
 	$(PYTHON) test/build_test.py
 
