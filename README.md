@@ -18,13 +18,13 @@ the pinned erlfmt 1.8.0 project plugin on first use.
 make       # compile into _build/default/lib/angler/ebin
 make test  # run EUnit and CLI process tests (requires Python 3)
 make test-emacs  # optional: run Emacs integration tests with Emacs installed
-make fmt   # format sources/tests/config in place with standalone erlfmt
+make fmt   # format configured sources/tests/snippets via rebar3 fmt -w
 ```
 
-To format generated Erlang instead, run `make fmt FMT_FILES=example.erl`.
-Override `ERLFMT` to select a standalone formatter executable outside `PATH`.
-Use `rebar3 fmt --write` below to use the pinned plugin without a standalone installation.
-Formatting is optional and can change source line numbers, including `?LINE`.
+To format a single generated file, run `rebar3 fmt -w example.erl`.
+`make fmt` uses the file list in `rebar.config`, including `_snippets/*.erl`.
+Formatting is optional and can change source line numbers; see
+[Known limitations](#known-limitations) for `?FILE` and `?LINE` behavior.
 
 Rebar3 is also supported directly:
 
@@ -120,8 +120,10 @@ function definitions. Module-less fragments use the first definition as the
 insertion point; they still need a module declaration to compile. Existing
 unconditional, literal `-export` entries are respected without adding duplicate
 exports, and existing attributes remain byte-for-byte intact. Generated text
-includes a separating space but adds no newlines, preserving `?LINE` and all
-original comments and line endings. Columns on the insertion line may shift.
+currently includes a separating space and adds no newlines. This is an
+implementation detail, not a source-line preservation guarantee for transformed
+code. Optional erlfmt formatting provides standard layout and can change line
+numbers. See [Known limitations](#known-limitations).
 Without directives, transpilation is an exact round trip; applying it again to
 generated Erlang leaves the output unchanged. There is no export-by-name rule.
 
@@ -203,7 +205,8 @@ Erlang's type parser, including unions, records, remote types, and function
 types. Macro-expanded argument patterns cannot establish a generated arity and are
 rejected on annotated functions; use an explicit spec. Macro types and type
 constraints requiring explicit specifications are not implemented. Tokens removed from annotations leave comments and
-whitespace intact; generated specs add no newlines. Nested expression blocks
+whitespace intact; generated specs currently add no newlines, without a
+source-line compatibility guarantee. Nested expression blocks
 and guard alternatives are distinguished from top-level function clauses.
 
 ### Local export directive
@@ -231,7 +234,50 @@ x_initialize() ->
     ok.
 ```
 
-Several `_export` directives can be collected into a generated export attribute. Existing standard `-export` declarations are preserved. There is **no** export-by-name convention. `_export` is lexically an Erlang variable, but is not a valid standalone top-level Erlang form; its special meaning is restricted to that position. Future Angler directives may use underscore-prefixed names where similarly unambiguous.
+Several `_export` directives can be collected into a generated export attribute.
+Existing standard `-export` declarations are preserved. There is **no**
+export-by-name convention. `_export` is lexically an Erlang variable, but its
+special meaning is restricted to the beginning of a top-level form. Only
+comments and whitespace may occur between the directive and its function;
+intervening module attributes, including `-spec`, are errors.
+
+#### Optional export tags (agreed design; not implemented yet)
+
+A directive may optionally carry a **single atom tag**, in parentheses:
+
+```erlang
+_export(api)
+start() ->
+    ok.
+
+_export(gen_server)
+init(Args) ->
+    {ok, Args}.
+```
+
+Plain `_export` remains valid and belongs to an untagged group. A function has
+at most one tag; multiple tags and repeated directives are errors. Comments
+and whitespace remain the only permitted content between the complete
+directive and its function. Tags group output only: they do not change export
+visibility, validate behavior callbacks, or introduce runtime metadata.
+
+Generate one export attribute per group, with tagged groups labeled by comments:
+
+```erlang
+%% api
+-export([start/0, stop/0]).
+
+%% gen_server
+-export([init/1, handle_call/3]).
+```
+
+Groups follow first-seen order; functions within each group follow source order.
+The untagged group has no tag label. Existing standard export attributes remain
+intact, and entries already exported are not duplicated by generated groups.
+Generated comments may add lines; output can be normalized with erlfmt.
+Source-line preservation is not a requirement for transformed extended syntax.
+The current implementation supports only plain `_export`; tagged syntax is a
+planned extension to the completed Exports milestone.
 
 ### Record fields and updates
 
@@ -285,8 +331,8 @@ There is no branch-flow or shadowing analysis: avoid shadowing annotated names,
 and supply intermediate annotations for nested records. `P.address.city` is
 rejected; use `A :: #address{} = P.address, A.city` instead. The field atom must
 immediately follow its dot, as whitespace after a dot denotes an Erlang form
-terminator. Comments/whitespace elsewhere are retained, and rewriting adds no
-newlines.
+terminator. Comments/whitespace elsewhere are retained. The current rewrite
+adds no newlines, but source-line preservation is not guaranteed.
 
 ## Optional Eqwalizer support
 
@@ -342,7 +388,12 @@ Pipeline: tokenize; identify forms and clauses; collect types and exports; build
 
 ## Project layout and build synchronization
 
-Angler treats `src_ex/` as the authoritative source tree and `src/` as a **disposable, generated mirror**. Users must not keep valuable files only in `src/`; Angler may overwrite or delete any of its contents. There is no output ownership manifest, staging tree, or transactional publication.
+Build mirroring is an agreed design and is **not implemented yet**. It treats
+`src_ex/` as the authoritative source tree and `src/` as the generated output
+mirror. Mapped output files may be overwritten during generation, so do not
+keep valuable edits only in generated files. Extra output files are preserved
+by default and removed only with an explicit `-d`/`--delete`. There is no output
+ownership manifest, staging tree, or transactional publication.
 
 Example:
 
@@ -367,15 +418,40 @@ my_app/
 - **Every other file** is copied byte-for-byte, regardless of extension (including `*.erl` and extensionless files).
 - The relative directory structure is preserved.
 - Colliding destinations, such as `foo.erl` and `foo.erlx` in the same input directory, are build errors.
-- Output files without corresponding inputs are deleted, as are now-empty output directories.
+- Output files without corresponding inputs are extras: warn for each extra
+  and leave it untouched by default. `-d`/`--delete` removes extras and the
+  output directories made empty by that deletion, only after all generation
+  and copying operations succeed. Do not follow output symlinks when deleting.
 - `src_ex/` must exist; missing input is an error, not an instruction to empty `src/`.
 - Input/output locations must not overlap, and `src/` must not be a symlink.
 
-Angler itself handles incremental rebuilds using file modification times; GNU Make is not required. Missing or outdated outputs are generated or copied; up-to-date outputs are left untouched to avoid unnecessary recompilation by Erlang build tools. A clean build is needed when transpiler version or options change.
+Angler handles incremental rebuilds using file modification times; GNU Make
+is not required. Missing or outdated mapped outputs are generated or copied;
+up-to-date outputs are left untouched. The agreed build options are:
 
-**Failure semantics:** If any build operation fails, Angler exits nonzero. The contents of `src/` are then **not guaranteed to be consistent**. Users may clean `src/` and rebuild. For v1 there is no rollback, staging, or guarantee that a failed build preserves the previous mirror. An optional `angler build --clean` can remove and recreate the output tree.
+| Option | Behavior |
+| --- | --- |
+| No cleanup flag | Incrementally generate/copy mapped files; warn about extras and preserve them. |
+| `-d`, `--delete` | Also delete extras and resulting empty directories after generation/copying succeeds. |
+| `--clean` | Force regeneration/recopying of every mapped output, regardless of timestamps. Preserve extras unless `--delete` is also supplied. |
+| `--clean --delete` | Force regeneration and remove extras, producing an exact mirror on success. |
 
-On successful completion, `src/` contains precisely the mapped files from `src_ex/`, with no extras. Avoid following output symlinks during recursive cleanup.
+Use `--clean` when the transpiler version or options change. It does **not**
+remove and recreate the entire output tree, and never implies `--delete`.
+
+**Warning policy (agreed design; not implemented yet):** warnings alone leave
+the exit status at zero. `--warnings-as-errors` applies to all transpiler
+warnings, including extras and partially annotated overloads: display the
+warnings and return a nonzero exit status. It does not imply deletion or grant
+permission to remove extras. Existing CLI warning behavior remains unchanged
+until this option is implemented.
+
+**Failure semantics:** a generation, copy, or deletion failure returns nonzero.
+Generation/copy failures prevent the deletion phase, but already written
+outputs can remain: v1 provides no rollback or staging. Warning promotion is an
+exit-status policy, not a transactional guarantee. Without `--delete`, a
+successful build may retain extras; with `--delete`, successful synchronization
+leaves precisely the files mapped from `src_ex/`.
 
 ## CLI and snippet transpilation
 
@@ -388,7 +464,7 @@ entry points:
 | `angler snippet` | Transpile local annotations and record shorthand in an expression sequence from stdin. |
 | `angler --version` | Print the version. |
 | `angler --help` (or `-h`) | Print usage and current limitations. |
-| `angler build`, `angler build --clean` | Planned build-mirroring commands; currently return an error. |
+| `angler build [--clean] [--delete]` | Planned build synchronization; currently returns an error. |
 
 `transpile` and `snippet` accept `--encoding utf8|latin1` (UTF-8 by default).
 Use `--` before filenames starting with `-`. File arguments are relative to the
@@ -436,8 +512,10 @@ transformation failures emit no partial source. Module transpilation remains
 token rewriting with type, export, and record passes; use `erlc` to validate the generated module.
 
 Build mirroring will later add `--input` and `--output`, defaulting to `src_ex`
-and `src`. Those flags, directory synchronization, and Eqwalizer are not part
-of the current CLI.
+and `src`, plus `--clean` and `-d`/`--delete` as specified above.
+`--warnings-as-errors` is also planned for all commands that issue warnings.
+These flags, directory synchronization, export tags, and Eqwalizer are not
+implemented in the current CLI.
 
 ### Emacs integration
 
@@ -477,6 +555,20 @@ transpile(transpile(Source)) == transpile(Source)
 
 Benchmark scanner, rewriting, emitter, total time, and startup cost on modules of varying sizes before considering a different implementation language.
 
+## Known limitations
+
+- `?FILE` and `?LINE` are left to Erlang's preprocessor. The transpiler does not
+  replace them with values relative to the original `.erlx` source. Such
+  handling, including macros, includes, and `-file` attributes, is postponed.
+- Byte-for-byte preservation applies to supported ordinary Erlang without
+  extensions. Transformed extended syntax has no source-line preservation
+  guarantee. Compiler diagnostics, stack traces, and `?LINE` can refer to the
+  generated layout; `?FILE` normally identifies the generated `.erl` file.
+- Running erlfmt on generated output may change line numbers further. Users
+  who depend on its current line layout should avoid formatting that output.
+  Avoiding erlfmt does not establish original `.erlx` filenames or guarantee
+  original source line numbers. Source mapping remains future work.
+
 ## Deliberately out of scope for v1
 
 - New conditional expressions such as `cond`.
@@ -489,14 +581,14 @@ Benchmark scanner, rewriting, emitter, total time, and startup cost on modules o
 
 ## Development milestones
 
-1. **Lossless round-trip (implemented):** scanner and emitter; byte-for-byte preservation with documented encoding boundaries.
-2. **Exports (implemented):** recognize `_export` and emit export attributes.
-3. **Snippet and CLI (implemented):** stdin/stdout expression validation and preservation, single-file transpilation, and basic Emacs Erlang-mode integration. Originally moved ahead of types and records; record snippet rewriting is now implemented.
-4. **Function types (implemented):** inline annotations and multi-clause overloaded `-spec` generation.
-5. **Records (implemented):** local annotations, field access, and updates, including in snippet mode.
-6. **Build mirroring:** recursive `src_ex/` to `src/` synchronization, arbitrary-file copying, timestamps, collision detection, stale-output deletion, and clean builds.
-7. **Eqwalizer option:** checked local annotations behind an explicit flag.
-8. **Integration:** golden tests, compilation tests, diagnostics, optional Rebar3 hook, documentation, and benchmarks.
+1. [x] **Lossless round-trip (implemented):** scanner and emitter; byte-for-byte preservation with documented encoding boundaries.
+2. [x] **Exports (implemented):** plain `_export` and generated export attributes. Optional tagged groups are an agreed, pending enhancement.
+3. [x] **Snippet and CLI (implemented):** stdin/stdout expression validation and preservation, single-file transpilation, and basic Emacs Erlang-mode integration. Originally moved ahead of types and records; record snippet rewriting is now implemented.
+4. [x] **Function types (implemented):** inline annotations and multi-clause overloaded `-spec` generation.
+5. [x] **Records (implemented):** local annotations, field access, and updates, including in snippet mode.
+6. [ ] **Build mirroring:** recursive synchronization, arbitrary-file copying, timestamps, collision detection, default warnings for extras, opt-in `-d`/`--delete`, force regeneration with `--clean`, and `--warnings-as-errors`.
+7. [ ] **Eqwalizer option:** checked local annotations behind an explicit flag.
+8. [ ] **Integration:** golden tests, compilation tests, diagnostics, optional Rebar3 hook, documentation, and benchmarks.
 
 ## Open design decisions
 
@@ -505,7 +597,7 @@ Benchmark scanner, rewriting, emitter, total time, and startup cost on modules o
 3. Resolved: explicit `-spec` plus inline function annotations on the same name/arity is an error, including identical types. Local annotations are independent.
 4. Resolved for milestone 2: comments/whitespace may intervene between `_export` and its function; module attributes may not.
 5. Which local annotation positions support checked Eqwalizer casts.
-6. Precise whitespace and source-location compatibility guarantees.
+6. Source-relative `?FILE`/`?LINE` handling and source mapping are postponed; see Known limitations. Ordinary Erlang round trips remain lossless, while transformed extended syntax has no line-number guarantee.
 
 These decisions should not block the initial scanner/emitter prototype.
 
