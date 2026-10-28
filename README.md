@@ -553,12 +553,29 @@ the library returns warnings for the caller to handle.
 
 ### Emacs integration
 
-Load the supplied helper alongside Erlang mode, using your checkout's path:
+`angler-mode` is a major mode derived from the Erlang distribution's
+`erlang-mode`. The initial mode setup associates `.erlx` files, inherits
+Erlang's keymap, syntax table, indentation, highlighting and navigation, and
+runs `erlang-mode-hook` followed by `angler-mode-hook`. Angler-specific
+highlighting, indentation and navigation adjustments are still planned.
+
+Ensure the Erlang distribution's `erlang.el` is on Emacs's `load-path`. If your
+installation has not configured this already, add its `lib/tools-VERSION/emacs`
+directory (or your distribution's Erlang-mode package directory). Then load
+Angler using your checkout's path:
 
 ```elisp
+;; Only needed if erlang.el is not already on load-path:
+(add-to-list 'load-path "/path/to/otp/lib/tools-VERSION/emacs")
 (load-file "/path/to/angler-lang/emacs/angler.el")
 (setq angler-program "/path/to/angler-lang/bin/angler")
 ```
+
+New `.erlx` buffers select `angler-mode` automatically. For an already open
+buffer, use `M-x angler-mode`. The mode leaves ordinary `.erl` associations and
+the source buffer contents unchanged. Customize Angler-specific settings in
+`angler-mode-hook`; existing `erlang-mode-hook` customization still applies.
+The copy helper can also be used without enabling the major mode.
 
 Select an expression sequence and run `M-x angler-copy-snippet`. It invokes
 `angler snippet` using UTF-8, copies successful output to the kill ring, and
@@ -566,6 +583,10 @@ leaves the source buffer unchanged. Paste the result into an Erlang shell.
 Failures display `*Angler diagnostics*` and leave the kill ring unchanged.
 Build with `make` first and ensure `erl` is available to Emacs through `PATH`.
 A future command may send the output directly to the running Erlang shell.
+
+`make test-emacs` discovers the parent mode under Erlang's tools application.
+If it is installed elsewhere, set `ERLANG_EMACS_DIR=/path/to/erlang-mode` when
+running the target. `EMACS=/path/to/emacs` selects the Emacs executable.
 
 A Rebar3 pre-compile hook can run `angler build`; Rebar3 integration is optional rather than a required part of the transpiler.
 
@@ -621,8 +642,9 @@ Benchmark scanner, rewriting, emitter, total time, and startup cost on modules o
 4. [x] **Function types (implemented):** inline annotations and multi-clause overloaded `-spec` generation.
 5. [x] **Records (implemented):** local annotations, field access, and updates, including in snippet mode.
 6. [x] **Build mirroring (implemented):** recursive synchronization, arbitrary-file copying, timestamps, collision detection, default warnings for extras, opt-in `-d`/`--delete`, force regeneration with `--clean`, and `--warnings-as-errors`.
-7. [ ] **Eqwalizer option:** checked local annotations behind an explicit flag.
-8. [ ] **Integration:** golden tests, compilation tests, diagnostics, optional Rebar3 hook, documentation, and benchmarks.
+7. [ ] **Emacs support:** an `angler-mode` major mode derived from the Erlang distribution's `erlang-mode`, with `.erlx` association, highlighting, indentation and navigation for extended syntax; source-preserving transpile/copy/send commands and compilation integration, covered by ERT tests. Mode setup (inheritance, `.erlx` association, hooks, and buffer-local customization) and `angler-copy-snippet` are implemented and tested. Angler-specific syntax behavior, additional commands, and direct shell sending remain planned.
+8. [ ] **Eqwalizer option:** checked local annotations behind an explicit flag.
+9. [ ] **Integration:** golden tests, compilation tests, diagnostics, optional Rebar3 hook, documentation, and benchmarks.
 
 ## Open design decisions
 

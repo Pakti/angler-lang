@@ -1,7 +1,9 @@
-;;; angler.el --- Copy transpiled Erlang regions -*- lexical-binding: t; -*-
+;;; angler.el --- Major mode and snippet commands for Angler -*- lexical-binding: t; -*-
 
 ;;; Commentary:
-;; Load this file from Erlang mode and run M-x angler-copy-snippet.
+;; Load this file to associate .erlx with angler-mode.  The Erlang
+;; distribution's erlang.el must be on load-path when enabling the mode.
+;; The snippet helper also works independently of the major mode.
 
 ;;; Code:
 
@@ -10,6 +12,19 @@
 (defcustom angler-program "angler"
   "Angler executable used to transpile snippets."
   :type 'file :group 'angler)
+
+;; Load the parent on demand so copying a snippet does not require erlang.el.
+(autoload 'erlang-mode "erlang" "Major mode for Erlang source." t)
+
+;;;###autoload
+(define-derived-mode angler-mode erlang-mode "Angler"
+  "Major mode for Angler source, based on the installed Erlang mode.
+Run `erlang-mode-hook' followed by `angler-mode-hook'.  This initial
+mode inherits Erlang highlighting, indentation, navigation and bindings;
+Angler-specific syntax support will be added in subsequent steps.")
+
+;;;###autoload
+(add-to-list 'auto-mode-alist '("\\.erlx\\'" . angler-mode))
 
 ;;;###autoload
 (defun angler-copy-snippet (begin end)
