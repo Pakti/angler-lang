@@ -12,7 +12,8 @@ Syntax support depends on the OTP version running Angler.
 Angler currently provides:
 
 - **An `_export` qualifier for top-level functions**, optionally tagged to group
-  generated export attributes.
+  generated export attributes -- this makes readily apparent which functions are
+  exported and which not, and how exported functions are related;
 - **Inline function types:** argument and return annotations generate `-spec`
   declarations, including overloaded specs.
 - **Concise tuple-record operations:** `P.age` and `P{age = 42}`, using an
