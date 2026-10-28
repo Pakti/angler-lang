@@ -11,7 +11,7 @@ Syntax support depends on the OTP version running Angler.
 
 Angler currently provides:
 
-- **Exports beside their definitions:** `_export`, optionally tagged to group
+- **An `_export` qualifier for top-level functions**, optionally tagged to group
   generated export attributes.
 - **Inline function types:** argument and return annotations generate `-spec`
   declarations, including overloaded specs.
@@ -429,21 +429,12 @@ code compilation/execution, CLI behavior, build mirroring, and editor commands.
 The OTP 29 [native-record probe](example/native_probe.erlx) is a separate manual
 compatibility example; it is not part of the OTP 27 test suite.
 
-## Development milestones
+## Next milestones
 
-1. [x] **Lossless round-trip:** scanner/emitter and encoding boundaries.
-2. [x] **Exports:** plain and tagged directives, grouped export attributes.
-3. [x] **Snippet and CLI:** expression preprocessing and single-file commands.
-4. [x] **Function types:** inline annotations and overloaded spec generation.
-5. [x] **Records:** shorthand, local hints, and limited record-name deduction.
-6. [x] **Build mirroring:** incremental copying/transpilation, cleanup flags,
-   and warning promotion.
-7. [x] **Emacs support:** major mode, highlighting, indentation/navigation,
-   copy/send/transpile commands, and asynchronous project builds.
-8. [ ] **Eqwalizer option:** preserve local type assertions as checked casts
+1. [ ] **Eqwalizer option:** preserve local type assertions as checked casts
    behind an explicit flag. The macro interface and supported annotation
    positions still need to be settled; there is currently no `--eqwalizer` flag.
-9. [ ] **Integration:** further integration hardening, an optional Rebar3 hook,
+2. [ ] **Integration:** further integration hardening, an optional Rebar3 hook,
    and benchmarks. Golden tests, compilation tests, diagnostics, and the
    documentation already exist and will continue to improve.
 
