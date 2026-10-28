@@ -58,7 +58,7 @@ class CliTests(unittest.TestCase):
             self.assertNotIn(b"init terminating", result.stderr)
 
     def test_usage_errors(self):
-        for args in ((), ("wat",), ("build",), ("transpile",),
+        for args in ((), ("wat",), ("build", "unexpected"), ("transpile",),
                      ("transpile", "a", "b"), ("snippet", "file"),
                      ("snippet", "--eqwalizer"), ("snippet", "--encoding"),
                      ("snippet", "--encoding", "utf16")):

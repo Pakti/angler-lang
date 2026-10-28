@@ -2,9 +2,9 @@
 
 Angler is a proposed lightweight, conservative syntax extension for Erlang. It transpiles extended source into ordinary Erlang without introducing a new runtime or type checker.
 
-> Status: milestones 1–5 implemented: lossless scanner/emitter, local exports,
-> Snippet and CLI, Function types, and Records. Build mirroring and Eqwalizer
-> remain design proposals.
+> Status: milestones 1–6 implemented: lossless scanner/emitter, local exports,
+> Snippet and CLI, Function types, Records, and Build mirroring. Eqwalizer and
+> the remaining integration work are planned.
 
 ## Developing the prototype
 
@@ -39,7 +39,7 @@ rebar3 fmt --check      # check formatting without modifying files
 
 Use `make test` for both EUnit and CLI process tests, and `make test-emacs`
 for editor integration. There are no Common Test suites yet. `rebar.config`
-selects the five EUnit suites explicitly so example fixture modules are not
+selects the six EUnit suites explicitly so example fixture modules are not
 mistaken for suites. Both build tools share the application output directory,
 which is also used by `bin/angler`. Build again after changing source files.
 
@@ -47,8 +47,9 @@ In the prepared cloud environment, first run
 `. /workspace/.angler-tools/activate.sh` in each shell to activate Erlang.
 Run `bin/angler --help` after building, or add the checkout's `bin/` directory
 to `PATH` to use the `angler` command from any working directory.
-The prototype's own Erlang sources live in `src/`; the proposed generated-mirror
-workflow described below is not implemented and must not be run on this checkout.
+The prototype's own Erlang sources live in `src/`. Build mirroring is intended
+for consuming projects with a `src_ex/` input tree; do not use this checkout's
+handwritten `src/` as a generated output directory.
 
 From `erl -pa _build/default/lib/angler/ebin` after compilation:
 
@@ -388,7 +389,7 @@ Pipeline: tokenize; identify forms and clauses; collect types and exports; build
 
 ## Project layout and build synchronization
 
-Build mirroring is an agreed design and is **not implemented yet**. It treats
+Build mirroring is implemented by `angler build`. It treats
 `src_ex/` as the authoritative source tree and `src/` as the generated output
 mirror. Mapped output files may be overwritten during generation, so do not
 keep valuable edits only in generated files. Extra output files are preserved
@@ -439,12 +440,13 @@ up-to-date outputs are left untouched. The agreed build options are:
 Use `--clean` when the transpiler version or options change. It does **not**
 remove and recreate the entire output tree, and never implies `--delete`.
 
-**Warning policy (agreed design; not implemented yet):** warnings alone leave
+**Warning policy:** warnings alone leave
 the exit status at zero. `--warnings-as-errors` applies to all transpiler
 warnings, including extras and partially annotated overloads: display the
 warnings and return a nonzero exit status. It does not imply deletion or grant
-permission to remove extras. Existing CLI warning behavior remains unchanged
-until this option is implemented.
+permission to remove extras. Promotion changes the exit status, not the
+publication policy: successful writes and deletions requested with `--delete`
+remain, and successful single-file output is still emitted to stdout.
 
 **Failure semantics:** a generation, copy, or deletion failure returns nonzero.
 Generation/copy failures prevent the deletion phase, but already written
@@ -452,6 +454,24 @@ outputs can remain: v1 provides no rollback or staging. Warning promotion is an
 exit-status policy, not a transactional guarantee. Without `--delete`, a
 successful build may retain extras; with `--delete`, successful synchronization
 leaves precisely the files mapped from `src_ex/`.
+
+Mapped files are planned before any output writes; name collisions and
+file/directory collisions fail that preflight. Input and output paths must be
+disjoint after dot-segment normalization. Symlinks in root paths, input trees,
+and mapped output paths are rejected. Extra output symlinks are warned about
+or unlinked as leaves, never followed. Special file types are unsupported.
+An existing output file/directory type conflict is an error, even with
+`--clean --delete`; remove the blocking entry explicitly. A mapped output
+hard-linked to its input is also rejected. Empty input directories are retained;
+obsolete empty output directories are warned about or pruned with `--delete`.
+
+Only missing or older mapped outputs are written, unless `--clean` is supplied.
+Timestamp comparison has filesystem-second precision; same-time content edits
+may require `--clean`. Extended source is validated on every build so warnings
+and errors are still reported when output writes are skipped. Unchanged plain
+files are not reread. Copies preserve their bytes and permission bits. Each
+file is published through a private sibling followed by rename, avoiding
+partial individual files; this does not make the whole build transactional.
 
 ## CLI and snippet transpilation
 
@@ -464,7 +484,7 @@ entry points:
 | `angler snippet` | Transpile local annotations and record shorthand in an expression sequence from stdin. |
 | `angler --version` | Print the version. |
 | `angler --help` (or `-h`) | Print usage and current limitations. |
-| `angler build [--clean] [--delete]` | Planned build synchronization; currently returns an error. |
+| `angler build [--clean] [--delete]` | Incrementally synchronize `src_ex/` into `src/`; extras are preserved by default. |
 
 `transpile` and `snippet` accept `--encoding utf8|latin1` (UTF-8 by default).
 Use `--` before filenames starting with `-`. File arguments are relative to the
@@ -511,11 +531,25 @@ input/transformation/output errors, and `2` for usage errors. Input and
 transformation failures emit no partial source. Module transpilation remains
 token rewriting with type, export, and record passes; use `erlc` to validate the generated module.
 
-Build mirroring will later add `--input` and `--output`, defaulting to `src_ex`
-and `src`, plus `--clean` and `-d`/`--delete` as specified above.
-`--warnings-as-errors` is also planned for all commands that issue warnings.
-These flags, directory synchronization, export tags, and Eqwalizer are not
-implemented in the current CLI.
+Build accepts `--input DIR` and `--output DIR` (defaults: `src_ex` and `src`),
+`--clean`, `-d`/`--delete`, and `--encoding utf8|latin1` for extended source.
+Ordinary files, including `.erl`, are copied without decoding. All three source
+commands (`build`, `transpile`, `snippet`) accept `--warnings-as-errors`.
+Export tags and Eqwalizer remain unimplemented.
+
+```sh
+angler build
+angler build --input source --output generated --clean
+angler build --delete --warnings-as-errors
+```
+
+The corresponding library API is `angler:build()` or
+`angler:build(#{input => "src_ex", output => "src", clean => false,
+                delete => false, encoding => utf8})`. It returns
+`{ok, Stats, Warnings}` with written/skipped/deleted file counters, or
+`{error, {Path, Module, Reason}, Warnings}`. Warnings pair their source/output
+path with `{Location, Module, Reason}`. The CLI applies warning promotion;
+the library returns warnings for the caller to handle.
 
 ### Emacs integration
 
@@ -586,7 +620,7 @@ Benchmark scanner, rewriting, emitter, total time, and startup cost on modules o
 3. [x] **Snippet and CLI (implemented):** stdin/stdout expression validation and preservation, single-file transpilation, and basic Emacs Erlang-mode integration. Originally moved ahead of types and records; record snippet rewriting is now implemented.
 4. [x] **Function types (implemented):** inline annotations and multi-clause overloaded `-spec` generation.
 5. [x] **Records (implemented):** local annotations, field access, and updates, including in snippet mode.
-6. [ ] **Build mirroring:** recursive synchronization, arbitrary-file copying, timestamps, collision detection, default warnings for extras, opt-in `-d`/`--delete`, force regeneration with `--clean`, and `--warnings-as-errors`.
+6. [x] **Build mirroring (implemented):** recursive synchronization, arbitrary-file copying, timestamps, collision detection, default warnings for extras, opt-in `-d`/`--delete`, force regeneration with `--clean`, and `--warnings-as-errors`.
 7. [ ] **Eqwalizer option:** checked local annotations behind an explicit flag.
 8. [ ] **Integration:** golden tests, compilation tests, diagnostics, optional Rebar3 hook, documentation, and benchmarks.
 

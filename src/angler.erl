@@ -1,6 +1,10 @@
 %% Public transformation entry point. Later milestones extend this pipeline.
 -module(angler).
--export([transpile/1, transpile/2, snippet/1, snippet/2, transpile_with_warnings/2, format_error/1]).
+-export([transpile/1, transpile/2, snippet/1, snippet/2, transpile_with_warnings/2, format_error/1, build/0, build/1]).
+
+%% Options: input/output paths, clean/delete booleans, and source encoding.
+build() -> build(#{}).
+build(Options) -> ext_build:run(Options).
 
 -spec transpile(binary() | string()) ->
     {ok, binary() | string()} | {error, term()}.
