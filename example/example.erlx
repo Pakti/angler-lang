@@ -2,25 +2,25 @@
 -module(example).
 -record(person, {name, age}).
 
-_export(people) % Groups new/0 and birthday/1 under %% people.
-new() -> % No annotations: no -spec is generated.
-    P = #person{name = "Ada", age = 41}, % Deduces P's record type.
+_export(people) % Groups `new/0` and `birthday/1` under `%% people`.
+new() -> % No annotations: no `-spec` is generated.
+    P = #person{name = "Ada", age = 41}, % Deduces `P`'s record type.
     Alias = P, % Aliases inherit that type.
     Older :: #person{} = birthday(Alias), % Function results need a local hint; erased in output.
-    42 = Older.age, % Becomes Older#person.age.
+    42 = Older.age, % Becomes `Older#person.age`.
     Older.
 
 _export(people)
-birthday(P :: #person{}) :: #person{} -> % Emits -spec birthday(#person{}) -> #person{}.
-    P{age = P.age + 1}. % Becomes P#person{age = P#person.age + 1}.
+birthday(P :: #person{}) :: #person{} -> % Emits `-spec birthday(#person{}) -> #person{}.`
+    P{age = P.age + 1}. % Becomes `P#person{age = P#person.age + 1}`.
 
-_export(values) % Groups encode/1 and identity/1 under %% values.
-%% Emits one overloaded spec: -spec encode(integer()) -> binary(); (binary()) -> binary().
+_export(values) % Groups `encode/1` and `identity/1` under `%% values`.
+%% Emits one overloaded spec: `-spec encode(integer()) -> binary(); (binary()) -> binary().`
 encode(N :: integer()) :: binary() when is_integer(N) ->
     integer_to_binary(N);
 encode(B :: binary()) :: binary() when is_binary(B) ->
     B.
 
 _export(values)
-identity(Value) -> % Unannotated arguments and return: no -spec is generated.
+identity(Value) -> % Unannotated arguments and return: no `-spec` is generated.
     Value.
