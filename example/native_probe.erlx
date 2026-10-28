@@ -1,0 +1,36 @@
+-module(native_probe).
+
+-export([run/0]).
+
+%% checks
+-export([local/1,qualified/1,anonymous/1,guarded/1]).
+
+-record #person{name, age}.
+
+
+run() ->
+    P = #person{name = "Ada", age = 41},
+    41 = local(P),
+    41 = qualified(P),
+    41 = anonymous(P),
+    41 = guarded(P),
+    ok.
+
+-spec local(any()) -> integer ( ). 
+local(#person{age = Age})   ->
+    Age.
+
+-spec qualified(any()) -> integer ( ). 
+qualified(#native_probe:person{age = Age})   ->
+    Age.
+
+-spec anonymous(any()) -> integer ( ). 
+anonymous(#_{age = Age})   ->
+    Age.
+
+-spec guarded(any()) -> integer ( ). 
+guarded(P)  
+    when is_record(P),
+         is_record(P, native_probe, person),
+         P#_.age >= 18 ->
+    P#_.age.
