@@ -4,19 +4,19 @@
 golden_test_() ->
     Cases = [
         {"-module(m).\n_export\nfoo() -> ok.\n",
-         "-module(m).\n-export([foo/0]). \nfoo() -> ok.\n"},
+         "-module(m).\n\n-export([foo/0]).\n\n\nfoo() -> ok.\n"},
         {"-module(m).\nhelper()->ok.\n_export\nfoo()->helper().",
-         "-module(m).\n-export([foo/0]). helper()->ok.\n\nfoo()->helper()."},
+         "-module(m).\n\n-export([foo/0]).\n\nhelper()->ok.\n\nfoo()->helper()."},
         {"-module(m).\r\n_export % keep\r\n% between\r\nfoo()->ok. % eof",
-         "-module(m).\r\n-export([foo/0]).  % keep\r\n% between\r\nfoo()->ok. % eof"},
+         "-module(m).\r\n\n-export([foo/0]).\n\n % keep\r\n% between\r\nfoo()->ok. % eof"},
         {"-module(m). _export foo()->ok. _export bar(X)->X.",
-         "-module(m). -export([foo/0,bar/1]).  foo()->ok.  bar(X)->X."},
+         "-module(m). \n-export([foo/0,bar/1]).\n\n foo()->ok.  bar(X)->X."},
         {"-module(m). -export([foo/0]). _export foo()->ok.",
          "-module(m). -export([foo/0]).  foo()->ok."},
         {"-module(m). _export foo()->ok. -export([foo/0]).",
          "-module(m).  foo()->ok. -export([foo/0])."},
         {"-module(m). _export 'quoted name'()->ok.",
-         "-module(m). -export(['quoted name'/0]).  'quoted name'()->ok."}
+         "-module(m). \n-export(['quoted name'/0]).\n\n 'quoted name'()->ok."}
     ],
     [?_assertEqual(Expected, transpile(Source)) || {Source, Expected} <- Cases] ++
     [?_assertEqual(unicode:characters_to_binary(Expected),
@@ -42,7 +42,7 @@ head_recognition_test_() ->
         {"f(X) when is_integer(X), X > 0; is_atom(X)", "f/1"},
         {"'end'(X)", "'end'/1"}
     ],
-    [?_assert(lists:prefix("-module(m). -export([" ++ Export ++ "]).",
+    [?_assert(lists:prefix("-module(m). \n-export([" ++ Export ++ "]).",
                  transpile("-module(m). _export " ++ Head ++ " -> ok.")))
      || {Head, Export} <- Heads].
 
@@ -80,7 +80,7 @@ encoding_test() ->
     Latin1 = <<"-module(m). % caf", 233, "\r\n_export f()->ok.">>,
     {ok, Output} = angler:transpile(Latin1, latin1),
     ?assertEqual(<<"-module(m). % caf", 233,
-                   "\r\n-export([f/0]).  f()->ok.">>, Output),
+                   "\r\n\n-export([f/0]).\n\n f()->ok.">>, Output),
     Utf8 = unicode:characters_to_binary("-module(m). _export '" ++
                                        [16#3bb] ++ "'()->ok."),
     Bom = <<239, 187, 191, Utf8/binary>>,
@@ -115,7 +115,7 @@ compiler_test_() ->
          "-export([other/0]).\n"
          "other()->ok.\n"
          "_export run()->{?LINE, other()}.\n",
-         [], fun() -> ?assertEqual({4,ok}, angler_exports_fixture:run()) end},
+         [], fun() -> ?assertEqual({7,ok}, angler_exports_fixture:run()) end},
         {"-module(angler_exports_fixture).\n"
          "-ifdef(FLAG).\nhelper()->yes.\n-else.\nhelper()->no.\n-endif.\n"
          "_export run()->helper().",
@@ -134,8 +134,6 @@ compiler_test_() ->
 compile_and_run(Source, Options, Check) ->
     Output = transpile(Source),
     ?assertEqual(Output, transpile(Output)),
-    ?assertEqual(length([C || C <- Source, C =:= $\n]),
-                 length([C || C <- Output, C =:= $\n])),
     Path = "_build/test/angler_exports_fixture.erl",
     ok = file:write_file(Path, Output),
     try
@@ -182,3 +180,15 @@ tagged_comments_test() ->
     Output = transpile("-module(m).\n_export('public api') % retained\n% between\nf()->ok."),
     ?assert(string:str(Output, "%% 'public api'\n-export([f/0]).") > 0),
     ?assert(string:str(Output, "% retained\n% between") > 0).
+
+export_spacing_test() ->
+    Source = "-module(m).\n-record(person, {name}).\n"
+             "_export(people) new()->ok.\n"
+             "_export(values) encode()->ok.\n"
+             "_export foo()->ok.\n",
+    Output = transpile(Source),
+    ?assert(lists:prefix("-module(m).\n\n"
+                        "%% people\n-export([new/0]).\n\n"
+                        "%% values\n-export([encode/0]).\n\n"
+                        "-export([foo/0]).\n\n"
+                        "-record(person, {name}).", Output)).

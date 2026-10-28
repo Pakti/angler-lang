@@ -115,15 +115,15 @@ the first function head with Erlang's parser, so nested patterns and guards are
 handled structurally. The normal compiler remains responsible for validating
 the complete function and consistency of its clauses.
 
-The emitter removes only directive tokens and inserts one combined export
-attribute immediately after `-module`, ahead of other attributes/includes and
+The emitter removes only directive tokens and inserts export groups immediately
+after `-module`, ahead of other attributes/includes and
 function definitions. Module-less fragments use the first definition as the
 insertion point; they still need a module declaration to compile. Existing
 unconditional, literal `-export` entries are respected without adding duplicate
-exports, and existing attributes remain byte-for-byte intact. Generated text
-currently includes a separating space and adds no newlines. This is an
-implementation detail, not a source-line preservation guarantee for transformed
-code. Optional erlfmt formatting provides standard layout and can change line
+exports, and existing attributes remain byte-for-byte intact. Generated groups
+are separated by blank lines, including before
+the following source form. Transformed code has no source-line preservation
+guarantee. Optional erlfmt formatting provides standard layout and can change line
 numbers. See [Known limitations](#known-limitations).
 Without directives, transpilation is an exact round trip; applying it again to
 generated Erlang leaves the output unchanged. There is no export-by-name rule.

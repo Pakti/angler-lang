@@ -8,7 +8,6 @@ compile_types_test() ->
              "convert(X :: binary()) :: binary() -> X.\n"
              "_export\napply_it(F :: fun((integer()) -> integer()), X :: integer()) :: integer() -> F(X).\n",
     {ok, Output, []} = angler:transpile_with_warnings(Source, utf8),
-    ?assertEqual(length([C || C <- Source, C =:= $\n]), length([C || C <- Output, C =:= $\n])),
     ?assertEqual({ok, Output}, angler:transpile(Output)),
     Path = "_build/test/types_fixture.erl",
     ok = file:write_file(Path, Output),

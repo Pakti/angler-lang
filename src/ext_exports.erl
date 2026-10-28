@@ -53,13 +53,14 @@ insert_exports(_, Replacements, []) -> Replacements;
 insert_exports(Forms, Replacements, Functions) ->
     %% Prefer immediately after -module, before includes that may themselves
     %% contain functions. For module-less input, use the first definition.
-    %% Untagged exports retain the legacy separator; tag labels add lines.
+    %% Separate generated groups from surrounding forms and each other.
     [{Index, Token} | _] = insertion_point(Forms, Forms),
     Replacement = maps:get(Index, Replacements, [Token]),
     Tags = lists:uniq([Tag || {Tag, _} <- Functions]),
     Groups = [group_tokens(Tag, [F || {T, F} <- Functions, T =:= Tag],
                            erl_scan:location(Token)) || Tag <- Tags],
-    Replacements#{Index => lists:append(Groups) ++ Replacement}.
+    Replacements#{Index => ext_syntax:generated("\n", erl_scan:location(Token)) ++
+                           lists:append(Groups) ++ Replacement}.
 
 insertion_point([{_, Form}, {_, Next} | Rest], All) ->
     case erl_parse:parse_form([T || {_, T} <- Form]) of
@@ -82,15 +83,13 @@ group_tokens({tag, Tag}, Functions, Location) ->
     SafeLabel = lists:flatten(string:replace(string:replace(Label, "\n", "\\n", all),
                                              "\r", "\\r", all)),
     ext_syntax:generated(["%% ", SafeLabel, "\n"], Location) ++
-        export_tokens(Functions, Location) ++ ext_syntax:generated("\n", Location).
+        export_tokens(Functions, Location).
 
 export_tokens(Functions, Location) ->
     Entries = [io_lib:format("~tp/~B", [Name, Arity]) || {Name, Arity} <- Functions],
-    %% A terminating dot must be followed by whitespace when another form
-    %% immediately follows it. The separator adds no source lines.
-    Text = lists:flatten(["-export([", lists:join(",", Entries), "]). "]),
-    {ok, Tokens, _} = erl_scan:string(Text, Location, [text]),
-    Tokens.
+    %% Both labeled and unlabeled groups end with a blank line.
+    Text = lists:flatten(["-export([", lists:join(",", Entries), "]).\n\n"]),
+    ext_syntax:generated(Text, Location).
 
 replace([], _, _) -> [];
 replace([Token | Rest], Index, Replacements) ->

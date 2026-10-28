@@ -25,3 +25,7 @@ encode(B :: binary()) :: binary() when is_binary(B) ->
 _export(values) % Adds `identity/1` to the generated `-export` under the comment `%% values`.
 identity(Value) -> % Unannotated arguments and return: no `-spec` is generated.
     Value.
+
+_export % Adds `foo/0` to an unlabeled export directive.
+foo() ->
+    foo.
