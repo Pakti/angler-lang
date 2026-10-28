@@ -1,4 +1,4 @@
-%% Showcasing the features of the transpiler.  See end of file for how to build and run.
+%% Example with extended syntax.
 
 -module(example).
 -record(person, {name, age}).
@@ -25,12 +25,3 @@ encode(B :: binary()) :: binary() when is_binary(B) ->
 _export(values) % Adds `identity/1` to the generated `-export` under the comment `%% values`.
 identity(Value) -> % Unannotated arguments and return: no `-spec` is generated.
     Value.
-
-%% # HOW TO BUILD AND RUN
-%%
-%% After `make`, from the project root:
-%%   mkdir -p _build/example
-%%   bin/angler transpile example/example.erlx > _build/example/example.erl
-%%   erlc -Werror -o _build/example _build/example/example.erl
-%%   erl -noshell -pa _build/example -eval 'P = example:new(), {person, "Ada", 43} = example:birthday(P), <<"42">> = example:encode(42), P = example:identity(P), halt().'
-%% Optionally format the output: `rebar3 fmt -w _build/example/example.erl`.
