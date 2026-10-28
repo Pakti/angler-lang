@@ -555,9 +555,18 @@ the library returns warnings for the caller to handle.
 
 `angler-mode` is a major mode derived from the Erlang distribution's
 `erlang-mode`. The initial mode setup associates `.erlx` files, inherits
-Erlang's keymap, syntax table, indentation, highlighting and navigation, and
-runs `erlang-mode-hook` followed by `angler-mode-hook`. Angler-specific
-highlighting, indentation and navigation adjustments are still planned.
+Erlang's keymap, syntax table, indentation and navigation, and runs
+`erlang-mode-hook` followed by `angler-mode-hook`. Angler-specific indentation
+and navigation adjustments are still planned.
+
+Syntax-aware highlighting recognizes top-level `_export`, inline/local type
+annotations, and abbreviated record access/updates, including multiline types.
+Comments, strings, quoted literals and ordinary Erlang syntax retain inherited
+highlighting. Highlighting is lexical and does not infer record types or
+validate the code. It also tolerates incomplete syntax while editing.
+Customize `angler-directive-face`, `angler-operator-face` and
+`angler-field-face` to adjust the appearance; type text uses the standard
+`font-lock-type-face` alongside inherited Erlang builtin/literal faces.
 
 Ensure the Erlang distribution's `erlang.el` is on Emacs's `load-path`. If your
 installation has not configured this already, add its `lib/tools-VERSION/emacs`
@@ -642,7 +651,7 @@ Benchmark scanner, rewriting, emitter, total time, and startup cost on modules o
 4. [x] **Function types (implemented):** inline annotations and multi-clause overloaded `-spec` generation.
 5. [x] **Records (implemented):** local annotations, field access, and updates, including in snippet mode.
 6. [x] **Build mirroring (implemented):** recursive synchronization, arbitrary-file copying, timestamps, collision detection, default warnings for extras, opt-in `-d`/`--delete`, force regeneration with `--clean`, and `--warnings-as-errors`.
-7. [ ] **Emacs support:** an `angler-mode` major mode derived from the Erlang distribution's `erlang-mode`, with `.erlx` association, highlighting, indentation and navigation for extended syntax; source-preserving transpile/copy/send commands and compilation integration, covered by ERT tests. Mode setup (inheritance, `.erlx` association, hooks, and buffer-local customization) and `angler-copy-snippet` are implemented and tested. Angler-specific syntax behavior, additional commands, and direct shell sending remain planned.
+7. [ ] **Emacs support:** an `angler-mode` major mode derived from the Erlang distribution's `erlang-mode`, with `.erlx` association, highlighting, indentation and navigation for extended syntax; source-preserving transpile/copy/send commands and compilation integration, covered by ERT tests. Mode setup (inheritance, `.erlx` association, hooks, and buffer-local customization), syntax highlighting, and `angler-copy-snippet` are implemented and tested. Angler-specific indentation/navigation, additional commands, and direct shell sending remain planned.
 8. [ ] **Eqwalizer option:** checked local annotations behind an explicit flag.
 9. [ ] **Integration:** golden tests, compilation tests, diagnostics, optional Rebar3 hook, documentation, and benchmarks.
 
