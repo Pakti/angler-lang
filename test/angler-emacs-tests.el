@@ -403,3 +403,247 @@
     (angler-mode)
     (angler-indent-line)
     (should (equal (buffer-string) "f(P :: %"))))
+
+(defun angler-test--kill-buffer (buffer)
+  "Kill test BUFFER and its process without interaction or history writes."
+  (when (buffer-live-p buffer)
+    (let ((process (get-buffer-process buffer)))
+      (when process (set-process-query-on-exit-flag process nil) (delete-process process)))
+    (with-current-buffer buffer
+      (setq-local comint-input-ring-file-name nil)
+      (let ((kill-buffer-query-functions nil)) (kill-buffer buffer)))))
+
+(defun angler-test--wait (process predicate)
+  "Wait briefly for PROCESS output until PREDICATE succeeds."
+  (let ((deadline (+ (float-time) 10)))
+    (while (and (not (funcall predicate)) (< (float-time) deadline))
+      (accept-process-output process 0.05))
+    (should (funcall predicate))))
+
+(defun angler-test--shell (&optional program arguments)
+  "Create a live isolated Erlang-mode shell, defaulting to an echo process."
+  (let ((buffer (generate-new-buffer " *Angler test shell*")))
+    (apply #'make-comint-in-buffer "angler-test" buffer (or program "cat") nil arguments)
+    (with-current-buffer buffer
+      (let ((erlang-input-ring-file-name nil)) (erlang-shell-mode))
+      (setq-local comint-input-ring-file-name nil))
+    buffer))
+
+(ert-deftest angler-transpile-buffer-includes-unsaved-text ()
+  (let ((angler-program (expand-file-name "bin/angler")))
+    (with-temp-buffer
+      (rename-buffer " *Angler source test*" t)
+      (insert "-module(m). % café\n_export run()->P=#person{},P.age.")
+      (setq-local buffer-file-coding-system 'iso-latin-1-unix)
+      (let ((original (buffer-string)) (output nil))
+        (unwind-protect
+            (progn
+              (setq output (angler-transpile-buffer))
+              (should (equal (buffer-string) original))
+              (should (buffer-modified-p))
+              (with-current-buffer output
+                (should buffer-read-only)
+                (should (eq major-mode 'erlang-mode))
+                (should (eq buffer-file-coding-system 'iso-latin-1-unix))
+                (should (string-match-p "café" (buffer-string)))
+                (should-not (buffer-modified-p))
+                (should (string-match-p "-export" (buffer-string)))
+                (should (string-match-p "P#person.age" (buffer-string)))))
+          (angler-test--kill-buffer output))))))
+
+(ert-deftest angler-transpile-failure-preserves-previous-output ()
+  (let ((angler-program (expand-file-name "bin/angler")) (output nil))
+    (unwind-protect
+        (with-temp-buffer
+          (rename-buffer " *Angler failure source*" t)
+          (insert "-module(m). _export f()->ok.")
+          (setq output (angler-transpile-buffer))
+          (let ((before (with-current-buffer output (buffer-string))))
+            (erase-buffer)
+            (insert "_export")
+            (should-error (angler-transpile-buffer) :type 'user-error)
+            (should (equal (with-current-buffer output (buffer-string)) before))))
+      (angler-test--kill-buffer output)
+      (angler-test--kill-buffer (get-buffer "*Angler diagnostics*")))))
+
+(ert-deftest angler-command-diagnostics-use-source-location ()
+  (let ((angler-program (expand-file-name "bin/angler"))
+        (file (make-temp-file "angler source " nil ".erlx")) (source nil))
+    (unwind-protect
+        (progn
+          (setq source (find-file-noselect file))
+          (with-current-buffer source
+            (insert "% first\n% second\n\t P.name.")
+            (goto-char (point-min))
+            (search-forward "P.name.")
+            (let ((end (point)) (begin (- (point) 7)))
+              (should-error (angler-copy-snippet begin end) :type 'user-error))
+            (should (buffer-modified-p)))
+          (with-current-buffer "*Angler diagnostics*"
+            (should (eq major-mode 'angler-compilation-mode))
+            (should (string-match-p (regexp-quote (concat file ": 3:3:")) (buffer-string))))
+          (save-window-excursion
+            (with-current-buffer source (next-error 1 t))
+            (with-current-buffer source
+              (should (= (line-number-at-pos) 3))
+              (should (= (current-column) 9))
+              (should (looking-at "P.name"))))
+          (with-temp-buffer (insert-file-contents file) (should (equal (buffer-string) ""))))
+      (when (buffer-live-p source) (with-current-buffer source (set-buffer-modified-p nil)))
+      (angler-test--kill-buffer source)
+      (angler-test--kill-buffer (get-buffer "*Angler diagnostics*"))
+      (delete-file file))))
+
+(ert-deftest angler-transpile-shows-warnings-and-promotion ()
+  (let ((angler-program (expand-file-name "bin/angler")) (output nil))
+    (unwind-protect
+        (with-temp-buffer
+          (insert "-module(m). _export f(X :: integer())->X; f(X)->X.")
+          (setq output (angler-transpile-buffer))
+          (with-current-buffer "*Angler diagnostics*"
+            (should (string-match-p "warning:" (buffer-string))))
+          (let ((angler-warnings-as-errors t))
+            (should-error (angler-transpile-buffer) :type 'user-error)))
+      (angler-test--kill-buffer output)
+      (angler-test--kill-buffer (get-buffer "*Angler diagnostics*")))))
+
+(ert-deftest angler-command-missing-executable-preserves-kill-ring ()
+  (let ((angler-program "/no/such/angler") (kill-ring '("keep")))
+    (unwind-protect
+        (with-temp-buffer
+          (insert "42.")
+          (should-error (angler-copy-snippet (point-min) (point-max)) :type 'user-error)
+          (should (equal kill-ring '("keep")))
+          (should (equal (buffer-string) "42.")))
+      (angler-test--kill-buffer (get-buffer "*Angler diagnostics*")))))
+
+(ert-deftest angler-send-snippet-selects-one-shell-and-preserves-source ()
+  (let ((angler-program (expand-file-name "bin/angler"))
+        (first (angler-test--shell)) (second (angler-test--shell))
+        (kill-ring '("keep")))
+    (unwind-protect
+        (with-temp-buffer
+          (insert "P=#person{},P.name.")
+          (let ((original (buffer-string)) (angler-shell-buffer (buffer-name second)))
+            (angler-send-snippet (point-min) (point-max))
+            (should (equal (buffer-string) original))
+            (should (equal kill-ring '("keep")))
+            (with-current-buffer second (should (string-match-p "P#person.name" (buffer-string))))
+            (with-current-buffer first (should (equal (buffer-string) "")))))
+      (angler-test--kill-buffer first)
+      (angler-test--kill-buffer second))))
+
+(ert-deftest angler-send-snippet-failures-do-not-touch-shell ()
+  (let ((angler-program (expand-file-name "bin/angler")) (shell (angler-test--shell)))
+    (unwind-protect
+        (with-temp-buffer
+          (insert "_export f()->ok.")
+          (should-error (angler-send-snippet (point-min) (point-max) shell) :type 'user-error)
+          (with-current-buffer shell (should (equal (buffer-string) "")))
+          (erase-buffer)
+          (insert "42.")
+          (with-current-buffer shell (insert "unfinished"))
+          (should-error (angler-send-snippet (point-min) (point-max) shell) :type 'user-error)
+          (with-current-buffer shell (should (equal (buffer-string) "unfinished"))))
+      (angler-test--kill-buffer shell)
+      (angler-test--kill-buffer (get-buffer "*Angler diagnostics*")))))
+
+(ert-deftest angler-shell-selection-requires-live-unique-shell ()
+  (let ((first (angler-test--shell)) (second (angler-test--shell)) (angler-shell-buffer nil))
+    (unwind-protect
+        (progn
+          (should-error (angler--select-shell nil nil) :type 'user-error)
+          (should (eq (angler--select-shell first nil) first))
+          (delete-process (get-buffer-process first))
+          (should-error (angler--select-shell first nil) :type 'user-error)
+          (should (eq (angler--select-shell nil nil) second)))
+      (angler-test--kill-buffer first)
+      (angler-test--kill-buffer second))))
+
+(ert-deftest angler-send-snippet-real-erlang-shell ()
+  (let ((angler-program (expand-file-name "bin/angler"))
+        (shell (angler-test--shell "erl" '("+S" "1:1"))))
+    (unwind-protect
+        (let ((process (get-buffer-process shell)))
+          (angler-test--wait process (lambda () (with-current-buffer shell
+                                                 (string-match-p "1>" (buffer-string)))))
+          (with-current-buffer shell
+            (goto-char (point-max))
+            (insert "rd(person, {age}).")
+            (comint-send-input nil t))
+          (angler-test--wait process (lambda () (with-current-buffer shell
+                                                 (string-match-p "2>" (buffer-string)))))
+          (with-temp-buffer
+            (insert "P=#person{age=41},P.age+1.")
+            (angler-send-snippet (point-min) (point-max) shell))
+          (angler-test--wait process (lambda () (with-current-buffer shell
+                                                 (string-match-p "\n42" (buffer-string))))))
+      (angler-test--kill-buffer shell))))
+
+(ert-deftest angler-project-build-and-argument-quoting ()
+  (let* ((angler-program (expand-file-name "bin/angler"))
+         (root (make-temp-file "angler project ' $ " t))
+         (input (expand-file-name "src_ex" root)) (build nil))
+    (unwind-protect
+        (progn
+          (make-directory (expand-file-name "nested" input) t)
+          (with-temp-file (expand-file-name "m.erlx" input)
+            (insert "-module(m). _export f()->ok."))
+          (with-temp-buffer
+            (setq default-directory (file-name-as-directory (expand-file-name "nested" input)))
+            (setq buffer-file-name (expand-file-name "m.erlx" input))
+            (insert "unsaved invalid source")
+            (let ((angler-build-arguments '("--output" "generated files")))
+              (setq build (angler-build)))
+            (should (buffer-modified-p))
+            (should (equal (buffer-string) "unsaved invalid source"))
+            (set-buffer-modified-p nil))
+          (let ((process (get-buffer-process build)))
+            (angler-test--wait process (lambda () (not (process-live-p process))))
+            (should (= (process-exit-status process) 0)))
+          (should (file-exists-p (expand-file-name "generated files/m.erl" root)))
+          (with-current-buffer build
+            (should (eq major-mode 'angler-compilation-mode))
+            (should (equal default-directory (file-name-as-directory root)))))
+      (angler-test--kill-buffer build)
+      (delete-directory root t))))
+
+(ert-deftest angler-build-diagnostics-are-navigable ()
+  (let* ((angler-program (expand-file-name "bin/angler"))
+         (root (make-temp-file "angler-errors-" t))
+         (file (expand-file-name "src_ex/bad.erlx" root)) (build nil) (visited nil))
+    (unwind-protect
+        (progn
+          (make-directory (file-name-directory file) t)
+          (with-temp-file file (insert "% first\n_export\n"))
+          (with-temp-buffer (setq build (angler-build root)))
+          (let ((process (get-buffer-process build)))
+            (angler-test--wait process (lambda () (not (process-live-p process))))
+            (should (= (process-exit-status process) 1)))
+          (save-window-excursion
+            (with-current-buffer build (compilation-next-error-function 1 t))
+            (setq visited (get-file-buffer file))
+            (should (buffer-live-p visited))
+            (with-current-buffer visited (should (= (line-number-at-pos) 2)))))
+      (angler-test--kill-buffer visited)
+      (angler-test--kill-buffer build)
+      (delete-directory root t))))
+
+(defvar native-comp-enable-subr-trampolines)
+
+(ert-deftest angler-shell-interactive-selection-and-no-shell-error ()
+  (let ((first (angler-test--shell)) (second (angler-test--shell)) (angler-shell-buffer nil)
+        (native-comp-enable-subr-trampolines nil))
+    (unwind-protect
+        (progn
+          (cl-letf (((symbol-function 'completing-read)
+                     (lambda (_prompt collection &rest _)
+                       (should (member (buffer-name first) collection))
+                       (should (member (buffer-name second) collection))
+                       (buffer-name second))))
+            (should (eq (angler--select-shell nil t) second)))
+          (delete-process (get-buffer-process first))
+          (delete-process (get-buffer-process second))
+          (should-error (angler--select-shell nil nil) :type 'user-error))
+      (angler-test--kill-buffer first)
+      (angler-test--kill-buffer second))))

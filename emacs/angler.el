@@ -473,36 +473,239 @@ Erlang mode on a temporary parser view.  Source syntax is never rewritten."
 ;;;###autoload
 (add-to-list 'auto-mode-alist '("\\.erlx\\'" . angler-mode))
 
+(require 'compile)
+(require 'comint)
+(require 'project)
+(require 'subr-x)
+
+(defcustom angler-shell-buffer nil
+  "Preferred live Erlang shell buffer name, or nil to select a shell.
+This may be set buffer-locally for projects using different shells."
+  :type '(choice (const :tag "Select automatically" nil) string) :group 'angler)
+
+(defcustom angler-project-root nil
+  "Explicit root for project builds, or nil to discover it.
+Discovery prefers a containing src_ex directory, then the Emacs project
+root, a containing rebar.config, and finally default-directory."
+  :type '(choice (const :tag "Discover" nil) directory) :group 'angler)
+
+(defcustom angler-build-arguments nil
+  "Additional CLI arguments for project builds, e.g. --input or --delete.
+Arguments are passed separately and shell quoted, never interpreted as code."
+  :type '(repeat string) :group 'angler)
+
+(defcustom angler-warnings-as-errors nil
+  "Whether editor commands should pass --warnings-as-errors to Angler."
+  :type 'boolean :group 'angler)
+
+(defconst angler--diagnostic-regexp
+  "^\\(.+?\\):[ \t]*\\([0-9]+\\):\\([0-9]+\\):[ \t]*\\(warning:\\)?"
+  "Source diagnostic format emitted by Angler.")
+
+(add-to-list 'compilation-error-regexp-alist-alist
+             `(angler ,angler--diagnostic-regexp 1 2 3 (4)))
+(add-to-list 'compilation-error-regexp-alist-alist
+             '(angler-build "^\\(.+?\\):[ \t]*{\\([0-9]+\\),\\([0-9]+\\)}:" 1 2 3))
+
+(define-compilation-mode angler-compilation-mode "Angler compilation"
+  "Compilation mode for Angler source diagnostics and build output."
+  (setq-local compilation-error-regexp-alist
+              (append '(angler angler-build) compilation-error-regexp-alist))
+  ;; erl_scan reports character columns, not expanded screen/tab columns.
+  (setq-local compilation-error-screen-columns nil))
+
+(defun angler--active-region ()
+  "Return active region bounds or signal an actionable error."
+  (unless (use-region-p) (user-error "Select an Angler expression region first"))
+  (list (region-beginning) (region-end)))
+
+(defun angler--diagnostics (text source)
+  "Display diagnostic TEXT associated with SOURCE without editing it."
+  (let ((buffer (get-buffer-create "*Angler diagnostics*")))
+    (with-current-buffer buffer
+      (let ((inhibit-read-only t))
+        (erase-buffer)
+        ;; Leave next-error before the first message, as compilation buffers do.
+        (insert "Angler diagnostics\n\n" text)
+        (goto-char (point-min)))
+      (if (buffer-local-value 'buffer-file-name source)
+          (progn
+            (angler-compilation-mode)
+            (setq-local default-directory (buffer-local-value 'default-directory source))
+            (setq next-error-last-buffer buffer))
+        ;; Unsaved buffers have no file for next-error to visit.
+        (special-mode)))
+    (display-buffer buffer)))
+
+(defun angler--source-diagnostics (text input source begin)
+  "Map INPUT diagnostics in TEXT to SOURCE starting at BEGIN."
+  (let* ((label (or (buffer-local-value 'buffer-file-name source)
+                    (format "<buffer %s>" (buffer-name source))))
+         (line (with-current-buffer source (line-number-at-pos begin t)))
+         (column (with-current-buffer source
+                   (save-restriction
+                     (widen)
+                     (save-excursion (goto-char begin) (- begin (line-beginning-position)))))))
+    (replace-regexp-in-string
+     (concat "^" (regexp-quote input) ":[ \t]*\\([0-9]+\\):\\([0-9]+\\):")
+     (lambda (match)
+       (save-match-data
+       (string-match ":[ \t]*\\([0-9]+\\):\\([0-9]+\\):\\'" match)
+       (let ((relative-line (string-to-number (match-string 1 match)))
+             (relative-column (string-to-number (match-string 2 match))))
+         (format "%s: %d:%d:" label (+ line relative-line -1)
+                 (+ relative-column (if (= relative-line 1) column 0))))))
+     text t t)))
+
+(defun angler--transform-region (command begin end)
+  "Run Angler COMMAND on BEGIN..END and return successful output.
+Keep source, kill ring, and output buffers unchanged on failure."
+  (let* ((source (current-buffer))
+         (errors (make-temp-file "angler-errors-"))
+         (input (when (equal command "transpile") (make-temp-file "angler-buffer-" nil ".erlx")))
+         (coding-system-for-write 'utf-8-unix)
+         (coding-system-for-read 'utf-8-unix)
+         (arguments (append (list command "--encoding" "utf8")
+                            (when angler-warnings-as-errors '("--warnings-as-errors"))
+                            (when input (list input)))))
+    (unwind-protect
+        (condition-case err
+            (with-temp-buffer
+              (let* ((output (current-buffer))
+                     (status (with-current-buffer source
+                               (if input
+                                   (progn
+                                     (write-region begin end input nil 'silent)
+                                     (apply #'call-process angler-program nil (list output errors) nil arguments))
+                                 (apply #'call-process-region begin end angler-program nil
+                                        (list output errors) nil arguments))))
+                     (stderr (with-temp-buffer (insert-file-contents errors) (buffer-string)))
+                     (diagnostics (angler--source-diagnostics stderr (or input "<stdin>") source begin)))
+                (if (string-empty-p diagnostics)
+                    (when-let ((old (get-buffer "*Angler diagnostics*")))
+                      (with-current-buffer old
+                        (let ((inhibit-read-only t)) (erase-buffer))
+                        (special-mode)))
+                  (angler--diagnostics diagnostics source))
+                (unless (and (integerp status) (zerop status))
+                  (when (string-empty-p diagnostics)
+                    (angler--diagnostics (format "Angler %s failed (status %s)\n" command status) source))
+                  (user-error "Angler %s failed (status %s)" command status))
+                (buffer-string)))
+          (file-error
+           (angler--diagnostics (concat (error-message-string err) "\n") source)
+           (user-error "Cannot run Angler: %s" (error-message-string err))))
+      (delete-file errors)
+      (when input (delete-file input)))))
+
 ;;;###autoload
 (defun angler-copy-snippet (begin end)
-  "Transpile the region from BEGIN to END and copy it to the kill ring.
-Leave the source buffer unchanged.  On failure display diagnostics and
-leave the kill ring unchanged.  Requires an active region interactively."
-  (interactive (progn
-                 (unless (use-region-p) (user-error "Select an Erlang region first"))
-                 (list (region-beginning) (region-end))))
-  (let ((source (current-buffer))
-        (errors (make-temp-file "angler-errors-"))
-        (coding-system-for-write 'utf-8-unix)
-        (coding-system-for-read 'utf-8-unix))
-    (unwind-protect
-        (with-temp-buffer
-          (let* ((output (current-buffer))
-                 (status (with-current-buffer source
-                           (call-process-region begin end angler-program nil
-                                                (list output errors) nil "snippet"))))
-            (if (and (integerp status) (zerop status))
-                (progn (kill-new (buffer-string))
-                       (message "Transpiled snippet copied"))
-              (let ((diagnostics (get-buffer-create "*Angler diagnostics*")))
-                (with-current-buffer diagnostics
-                  (let ((inhibit-read-only t))
-                    (erase-buffer)
-                    (insert-file-contents errors)
-                    (special-mode)))
-                (display-buffer diagnostics)
-                (user-error "Angler snippet failed (status %s)" status)))))
-      (delete-file errors))))
+  "Transpile BEGIN..END as expressions and copy output to the kill ring.
+Leave the source unchanged, and preserve the kill ring on failure."
+  (interactive (angler--active-region))
+  (kill-new (angler--transform-region "snippet" begin end))
+  (message "Transpiled snippet copied"))
+
+;;;###autoload
+(defun angler-transpile-buffer ()
+  "Transpile current buffer text into a separate read-only Erlang buffer.
+Unsaved edits are included without saving or changing the source file."
+  (interactive)
+  (let* ((name (format "*Angler transpilation: %s*" (buffer-name)))
+         (coding buffer-file-coding-system)
+         (output (save-restriction
+                   (widen)
+                   (angler--transform-region "transpile" (point-min) (point-max))))
+         (buffer (get-buffer-create name)))
+    (with-current-buffer buffer
+      (let ((inhibit-read-only t))
+        (erase-buffer)
+        (insert output)
+        (erlang-mode)
+        (setq-local buffer-file-coding-system coding)
+        (setq buffer-read-only t)
+        (set-buffer-modified-p nil)
+        (goto-char (point-min))))
+    (display-buffer buffer)
+    buffer))
+
+(defun angler--shell-buffers ()
+  "Return live Erlang comint buffers; never start a process implicitly."
+  (cl-remove-if-not
+   (lambda (buffer)
+     (with-current-buffer buffer
+       (and (derived-mode-p 'erlang-shell-mode) (comint-check-proc buffer))))
+   (buffer-list)))
+
+(defun angler--read-shell ()
+  "Read the name of an existing live Erlang shell."
+  (let ((buffers (angler--shell-buffers)))
+    (unless buffers (user-error "No live Erlang shell; start one with M-x erlang-shell"))
+    (completing-read "Erlang shell: " (mapcar #'buffer-name buffers) nil t)))
+
+(defun angler--select-shell (requested interactivep)
+  "Choose REQUESTED shell, or a configured/live one, respecting INTERACTIVEP."
+  (let* ((candidates (angler--shell-buffers))
+         (choice (or requested angler-shell-buffer
+                     (when (= (length candidates) 1) (car candidates)))))
+    (unless choice
+      (cond
+       ((null candidates) (user-error "No live Erlang shell; start one with M-x erlang-shell"))
+       (interactivep
+        (setq choice (completing-read "Erlang shell: " (mapcar #'buffer-name candidates) nil t)))
+       (t (user-error "Several Erlang shells are running; specify a shell buffer"))))
+    (let ((buffer (get-buffer choice)))
+      (unless (memq buffer candidates) (user-error "Not a live Erlang shell: %s" choice))
+      buffer)))
+
+;;;###autoload
+(defun angler-send-snippet (begin end &optional shell-buffer)
+  "Transpile BEGIN..END as expressions and send to SHELL-BUFFER.
+With a prefix argument, choose the shell explicitly.  Refuse pending shell
+input and never send anything if transpilation fails."
+  (interactive (append (angler--active-region)
+                       (list (when current-prefix-arg
+                               (angler--read-shell)))))
+  (let* ((output (angler--transform-region "snippet" begin end))
+         (shell (angler--select-shell shell-buffer (called-interactively-p 'interactive))))
+    (with-current-buffer shell
+      (let ((process (get-buffer-process shell)))
+        (unless (and process (process-live-p process)) (user-error "Erlang shell exited"))
+        (unless (= (marker-position (process-mark process)) (point-max))
+          (user-error "Erlang shell has pending input; finish or clear it first"))
+        (goto-char (point-max))
+        (insert output)
+        (comint-send-input nil t)))
+    (display-buffer shell)))
+
+(defun angler--build-root ()
+  "Find the root to use for a project build."
+  (file-name-as-directory
+   (expand-file-name
+    (or angler-project-root
+        (locate-dominating-file default-directory
+                                (lambda (dir) (file-directory-p (expand-file-name "src_ex" dir))))
+        (when-let ((project (project-current nil))) (project-root project))
+        (locate-dominating-file default-directory "rebar.config")
+        default-directory))))
+
+;;;###autoload
+(defun angler-build (&optional directory)
+  "Run a project build asynchronously through compilation-mode.
+With a prefix argument, choose DIRECTORY.  Builds read files on disk;
+this command does not save buffers or add deletion flags automatically."
+  (interactive (list (when current-prefix-arg (read-directory-name "Angler project: "))))
+  (let* ((default-directory (or (and directory (file-name-as-directory (expand-file-name directory)))
+                                (angler--build-root)))
+         (arguments (append '("build") angler-build-arguments
+                            (when angler-warnings-as-errors '("--warnings-as-errors"))))
+         (command (mapconcat #'shell-quote-argument (cons angler-program arguments) " ")))
+    (compilation-start command #'angler-compilation-mode)))
+
+(define-key angler-mode-map (kbd "C-c C-r") #'angler-copy-snippet)
+(define-key angler-mode-map (kbd "C-c C-e") #'angler-send-snippet)
+(define-key angler-mode-map (kbd "C-c C-t") #'angler-transpile-buffer)
+(define-key angler-mode-map (kbd "C-c C-k") #'angler-build)
 
 (provide 'angler)
 ;;; angler.el ends here
