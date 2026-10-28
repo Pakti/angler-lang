@@ -1,6 +1,6 @@
 %% Expand top-level _export directives without reformatting existing tokens.
 -module(ext_exports).
--export([rewrite/1, format_error/1]).
+-export([rewrite/1, directive/1, format_error/1]).
 
 -spec rewrite(ext_scan:document()) ->
     {ok, ext_scan:document()} | {error, term()}.
@@ -17,21 +17,34 @@ rewrite(Document) ->
 
 replacements([], _, Replacements, Generated) ->
     {ok, Replacements, lists:reverse(Generated)};
-replacements([{Context, [{Index, {var, _, '_export'} = Directive} | Rest]} | Forms],
-             Exports, Replacements, Generated) ->
-    case export_function(Context, Rest) of
-        {ok, Function} ->
-            NextGenerated = case already_exported(Function, Exports) of
-                true -> Generated;
-                false -> [Function | Generated]
-            end,
-            replacements(Forms, [{Context, Function} | Exports],
-                         Replacements#{Index => []}, NextGenerated);
-        {error, Reason} ->
-            {error, {erl_scan:location(Directive), ?MODULE, Reason}}
+replacements([{Context, Form} | Forms], Exports, Replacements, Generated) ->
+    case directive(Form) of
+        {ok, Tag, Removed, Rest} ->
+            Directive = element(2, hd(Removed)),
+            case export_function(Context, Rest) of
+                {ok, Function} ->
+                    NextGenerated = case already_exported(Function, Exports) of
+                        true -> Generated;
+                        false -> [{Tag, Function} | Generated]
+                    end,
+                    Edits = ext_syntax:remove(Removed, Replacements),
+                    replacements(Forms, [{Context, Function} | Exports], Edits, NextGenerated);
+                {error, Reason} -> {error, {erl_scan:location(Directive), ?MODULE, Reason}}
+            end;
+        none -> replacements(Forms, Exports, Replacements, Generated);
+        Error -> Error
+    end.
+
+%% Shared with the type/record passes, which must see the actual function head.
+directive([{_, {var, _, '_export'}} = Marker | Rest]) ->
+    case Rest of
+        [{_, {'(', _}} = Open, {_, {atom, _, Tag}} = Atom, {_, {')', _}} = Close | Function] ->
+            {ok, {tag, Tag}, [Marker, Open, Atom, Close], Function};
+        [{_, {'(', _}} | _] ->
+            {error, {erl_scan:location(element(2, Marker)), ?MODULE, invalid_tag}};
+        _ -> {ok, none, [Marker], Rest}
     end;
-replacements([_ | Forms], Exports, Replacements, Generated) ->
-    replacements(Forms, Exports, Replacements, Generated).
+directive(_) -> none.
 
 export_function([], Form) -> ext_forms:function(Form);
 export_function(_, _) -> {error, conditional_export}.
@@ -40,11 +53,13 @@ insert_exports(_, Replacements, []) -> Replacements;
 insert_exports(Forms, Replacements, Functions) ->
     %% Prefer immediately after -module, before includes that may themselves
     %% contain functions. For module-less input, use the first definition.
-    %% No newlines: ?LINE and existing trivia survive.
+    %% Untagged exports retain the legacy separator; tag labels add lines.
     [{Index, Token} | _] = insertion_point(Forms, Forms),
     Replacement = maps:get(Index, Replacements, [Token]),
-    Replacements#{Index => export_tokens(Functions, erl_scan:location(Token)) ++
-                           Replacement}.
+    Tags = lists:uniq([Tag || {Tag, _} <- Functions]),
+    Groups = [group_tokens(Tag, [F || {T, F} <- Functions, T =:= Tag],
+                           erl_scan:location(Token)) || Tag <- Tags],
+    Replacements#{Index => lists:append(Groups) ++ Replacement}.
 
 insertion_point([{_, Form}, {_, Next} | Rest], All) ->
     case erl_parse:parse_form([T || {_, T} <- Form]) of
@@ -60,6 +75,14 @@ first_definition([{[{Start, _} | _], _} | _], All) ->
     %% Do not accidentally put an unconditional export inside the branch
     %% containing the first (unmarked) function.
     hd([Form || {_, [{Index, _} | _] = Form} <- All, Index =:= Start]).
+
+group_tokens(none, Functions, Location) -> export_tokens(Functions, Location);
+group_tokens({tag, Tag}, Functions, Location) ->
+    Label = lists:flatten(io_lib:format("~tp", [Tag])),
+    SafeLabel = lists:flatten(string:replace(string:replace(Label, "\n", "\\n", all),
+                                             "\r", "\\r", all)),
+    ext_syntax:generated(["%% ", SafeLabel, "\n"], Location) ++
+        export_tokens(Functions, Location) ++ ext_syntax:generated("\n", Location).
 
 export_tokens(Functions, Location) ->
     Entries = [io_lib:format("~tp/~B", [Name, Arity]) || {Name, Arity} <- Functions],
@@ -118,6 +141,7 @@ attribute([{Index, {'-', _}}, {_, Token} | _]) ->
 attribute(_) -> none.
 
 -spec format_error(term()) -> string().
+format_error(invalid_tag) -> "_export accepts at most one atom tag: _export(api)";
 format_error(expected_function) ->
     "_export must be followed by a function, with only comments or whitespace between";
 format_error(conditional_export) ->

@@ -1,86 +1,155 @@
-%% A runnable tour of Angler's currently supported syntax.
+%% A runnable tour of Angler's syntax, using a small gen_server.
 %% From the project root, after `make`:
 %%   mkdir -p _build/example
 %%   bin/angler transpile example/example.erlx > _build/example/example.erl
 %%   erlc -Werror -o _build/example _build/example/example.erl
-%%   erl -noshell -pa _build/example -eval 'ok = example:start(), ok = example:stop(), halt().'
+%%   erl -noshell -pa _build/example -eval 'ok = example:smoke(), halt().'
 %% Optionally format the generated file with:
 %%   rebar3 fmt -w _build/example/example.erl
 
 -module(example).
+-behaviour(gen_server).
 
 -record(address, {city}).
 -record(person, {name, age, address}).
-
-%% Ordinary Erlang macros remain supported.
 -define(INITIAL_AGE, 41).
 
-_export % Adds start/0 to the generated export attribute.
-start() :: atom() -> % Generates -spec start() -> atom().
-    %% A direct construction establishes P's record name without an annotation.
-    P = #person{
-        name = "Ada",
-        age = ?INITIAL_AGE,
-        address = #address{city = "Rome"}
-    },
+%% Tags produce separate export attributes, labeled %% api and %% gen_server.
+%% This group exports start/0, stop/0, person/0, birthday/0, encode/1, smoke/0.
+%% Tags only group exports; ordinary -behaviour checks still apply.
 
-    "Ada" = name(P),
-    "Rome" = city(P),
+%% Emits -spec start() -> {ok, pid()} | {error, term()}.
+_export(api)
+start() :: {ok, pid()} | {error, term()} ->
+    gen_server:start_link({local, ?MODULE}, ?MODULE, [], []).
 
-    %% Function return values are not deduced; this annotation is needed.
-    Older :: #person{} = birthday(P),
-    42 = Older.age, % Becomes Older#person.age.
-    41 = P.age, % Becomes P#person.age; the original record is unchanged.
+%% Emits -spec stop() -> ok.
+_export(api)
+stop() :: ok ->
+    gen_server:stop(?MODULE).
 
-    %% Aliases inherit an already known record name.
-    Alias = Older,
-    "Ada" = Alias.name,
+%% Emits -spec person() -> #person{}.
+_export(api)
+person() :: #person{} ->
+    gen_server:call(?MODULE, person).
 
-    %% An abbreviated update establishes Next's record name as well.
-    Next = Alias{age = Alias.age + 1},
-    43 = Next.age,
+%% Emits -spec birthday() -> #person{}.
+_export(api)
+birthday() :: #person{} ->
+    gen_server:call(?MODULE, birthday).
 
-    %% Ordinary Erlang updates also establish a record name.
-    Explicit = Next#person{age = 44},
-    44 = Explicit.age,
-
-    %% Each encode/1 clause contributes a signature to one overloaded spec.
-    <<"42">> = encode(42),
-    <<"hello">> = encode(<<"hello">>),
-
-    %% Explicit specs can coexist with local annotations.
-    "Ada" = explicit_name(P),
-
-    %% Extension-like text in strings is left alone.
-    "P.name, P{age = 1}, _export, ::" = literal_text(),
-    ok.
-
-_export
-stop() :: atom() ->
-    ok.
-
-%% Generates -spec name(#person{}) -> string().
-name(P :: #person{}) :: string() ->
-    P.name.
-
-birthday(P :: #person{}) :: #person{} ->
-    P{age = P.age + 1}.
-
-city(P :: #person{}) :: string() ->
-    %% Field values are not deduced: annotate the intermediate record.
-    A :: #address{} = P.address,
-    A.city.
-
+%% Emits one overloaded spec:
+%% -spec encode(integer()) -> binary(); (binary()) -> binary().
+%% One directive exports every clause of encode/1.
+_export(api)
 encode(N :: integer()) :: binary() when is_integer(N) ->
     integer_to_binary(N);
 encode(B :: binary()) :: binary() when is_binary(B) ->
     B.
 
-%% An explicit spec replaces inline function annotations, not local hints.
+%% Emits -spec smoke() -> ok. Run this to exercise the public API and helpers.
+_export(api)
+smoke() :: ok ->
+    {ok, _Pid} = start(),
+    %% Function return values are not deduced: annotate this binding.
+    P :: #person{} = person(),
+    "Ada" = identity(name(P)),
+    "Rome" = city(P),
+    Older :: #person{} = birthday(),
+    42 = Older.age, % Becomes Older#person.age.
+    41 = P.age, % Becomes P#person.age; records are immutable.
+
+    %% Aliases inherit an already known record name.
+    Alias = Older,
+    "Ada" = Alias.name,
+    %% Abbreviated updates establish the result's record name, too.
+    Next = Alias{age = Alias.age + 1},
+    43 = Next.age,
+    %% Ordinary Erlang updates also establish a record name.
+    Explicit = Next#person{age = 44},
+    44 = Explicit.age,
+    <<"42">> = encode(42),
+    <<"hello">> = encode(<<"hello">>),
+    "Ada" = explicit_name(P),
+    "P.name, P{age = 1}, _export, ::" = literal_text(),
+    ok = stop(),
+    ok.
+
+%% The callback group exports init/1, handle_call/3, handle_cast/2,
+%% handle_info/2, terminate/2 and code_change/3.
+%% Emits -spec init(list()) -> {ok, #person{}}.
+_export(gen_server)
+init(Args :: list()) :: {ok, #person{}} ->
+    [] = Args,
+    %% Direct construction establishes P's record name without an annotation.
+    P = #person{
+        name = "Ada",
+        age = ?INITIAL_AGE,
+        address = #address{city = "Rome"}
+    },
+    "Ada" = P.name,
+    {ok, P}.
+
+%% Emits -spec handle_call(atom(), any(), #person{}) ->
+%%     {reply, term(), #person{}}.
+%% The unannotated _From defaults to any() in this otherwise typed head.
+_export(gen_server)
+handle_call(Request :: atom(), _From, State :: #person{}) :: {reply, term(), #person{}} ->
+    case Request of
+        person -> {reply, State, State};
+        birthday ->
+            Next :: #person{} = birthday(State),
+            {reply, Next, Next}
+    end.
+
+%% Emits -spec handle_cast(term(), #person{}) -> {noreply, #person{}}.
+_export(gen_server)
+handle_cast(_Request :: term(), State :: #person{}) :: {noreply, #person{}} ->
+    {noreply, State}.
+
+%% Emits -spec handle_info(term(), #person{}) -> {noreply, #person{}}.
+_export(gen_server)
+handle_info(_Message :: term(), State :: #person{}) :: {noreply, #person{}} ->
+    {noreply, State}.
+
+%% Emits -spec terminate(term(), #person{}) -> ok.
+_export(gen_server)
+terminate(_Reason :: term(), _State :: #person{}) :: ok ->
+    ok.
+
+%% Emits -spec code_change(term(), #person{}, term()) -> {ok, #person{}}.
+_export(gen_server)
+code_change(_OldVersion :: term(), State :: #person{}, _Extra :: term()) :: {ok, #person{}} ->
+    {ok, State}.
+
+%% Private: emits -spec name(#person{}) -> string(). No export is generated.
+name(P :: #person{}) :: string() ->
+    P.name.
+
+%% Private: emits -spec birthday(#person{}) -> #person{}.
+%% Rewrites the update as P#person{age = P#person.age + 1}.
+birthday(P :: #person{}) :: #person{} ->
+    P{age = P.age + 1}.
+
+%% Private: emits -spec city(#person{}) -> string().
+city(P :: #person{}) :: string() ->
+    %% Field values are not deduced: annotate the intermediate record.
+    A :: #address{} = P.address,
+    A.city.
+
+%% Private and completely untyped: no argument or return annotations,
+%% so no -spec is generated. A return annotation alone WOULD generate a spec.
+identity(Value) ->
+    Value.
+
+%% Private: preserves this explicit spec; generates no additional spec.
+%% Explicit specs can coexist with local annotations, but not inline head types.
 -spec explicit_name(#person{}) -> string().
 explicit_name(P) ->
     Local :: #person{} = P,
     Local.name.
 
+%% Private: emits -spec literal_text() -> string().
+%% Extension-like text inside strings is preserved verbatim.
 literal_text() :: string() ->
     "P.name, P{age = 1}, _export, ::".

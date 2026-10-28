@@ -647,3 +647,13 @@
           (should-error (angler--select-shell nil nil) :type 'user-error))
       (angler-test--kill-buffer first)
       (angler-test--kill-buffer second))))
+
+(ert-deftest angler-tagged-exports-layout-and-imenu ()
+  (with-temp-buffer
+    (insert "_export(api)\nf(X :: integer()) :: integer() ->\nX.\n\n_export(gen_server)\ng() ->\nok.\n")
+    (angler-mode)
+    (setq-local indent-tabs-mode nil)
+    (indent-region (point-min) (point-max))
+    (should (equal (mapcar #'car (angler-imenu-create-index)) '("f/1" "g/0")))
+    (should (string-match-p "\n    X\\." (buffer-string)))
+    (should (string-match-p "\n    ok\\." (buffer-string)))))

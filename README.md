@@ -242,7 +242,7 @@ special meaning is restricted to the beginning of a top-level form. Only
 comments and whitespace may occur between the directive and its function;
 intervening module attributes, including `-spec`, are errors.
 
-#### Optional export tags (agreed design; not implemented yet)
+#### Optional export tags
 
 A directive may optionally carry a **single atom tag**, in parentheses:
 
@@ -277,8 +277,6 @@ The untagged group has no tag label. Existing standard export attributes remain
 intact, and entries already exported are not duplicated by generated groups.
 Generated comments may add lines; output can be normalized with erlfmt.
 Source-line preservation is not a requirement for transformed extended syntax.
-The current implementation supports only plain `_export`; tagged syntax is a
-planned extension to the completed Exports milestone.
 
 ### Record fields and updates
 
@@ -569,7 +567,7 @@ Build accepts `--input DIR` and `--output DIR` (defaults: `src_ex` and `src`),
 `--clean`, `-d`/`--delete`, and `--encoding utf8|latin1` for extended source.
 Ordinary files, including `.erl`, are copied without decoding. All three source
 commands (`build`, `transpile`, `snippet`) accept `--warnings-as-errors`.
-Export tags and Eqwalizer remain unimplemented.
+Eqwalizer remains unimplemented.
 
 ```sh
 angler build
@@ -752,7 +750,7 @@ Benchmark scanner, rewriting, emitter, total time, and startup cost on modules o
 ## Development milestones
 
 1. [x] **Lossless round-trip (implemented):** scanner and emitter; byte-for-byte preservation with documented encoding boundaries.
-2. [x] **Exports (implemented):** plain `_export` and generated export attributes. Optional tagged groups are an agreed, pending enhancement.
+2. [x] **Exports (implemented):** plain and tagged `_export` directives and generated export groups.
 3. [x] **Snippet and CLI (implemented):** stdin/stdout expression validation and preservation, single-file transpilation, and basic Emacs Erlang-mode integration. Originally moved ahead of types and records; record snippet rewriting is now implemented.
 4. [x] **Function types (implemented):** inline annotations and multi-clause overloaded `-spec` generation.
 5. [x] **Records (implemented):** local annotations, field access, updates, and limited local record-name deduction, including in snippet mode.
