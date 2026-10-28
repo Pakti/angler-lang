@@ -590,8 +590,8 @@ the library returns warnings for the caller to handle.
 `angler-mode` is a major mode derived from the Erlang distribution's
 `erlang-mode`. The initial mode setup associates `.erlx` files, inherits
 Erlang's keymap, syntax table, indentation and navigation, and runs
-`erlang-mode-hook` followed by `angler-mode-hook`. Angler-specific indentation
-and navigation adjustments are still planned.
+`erlang-mode-hook` followed by `angler-mode-hook`. Angler-aware indentation,
+function/clause movement and Imenu are implemented.
 
 Syntax-aware highlighting recognizes top-level `_export`, inline/local type
 annotations, and abbreviated record access/updates, including multiline types.
@@ -601,6 +601,37 @@ validate the code. It also tolerates incomplete syntax while editing.
 Customize `angler-directive-face`, `angler-operator-face` and
 `angler-field-face` to adjust the appearance; type text uses the standard
 `font-lock-type-face` alongside inherited Erlang builtin/literal faces.
+
+Indentation uses a temporary, same-width Erlang parser view with annotations
+and shorthand masked out; it applies only leading-whitespace changes to the
+source. It handles typed heads, guards, multiple clauses, local annotations,
+record shorthand and multiline type continuations, while preserving literal
+string contents. Standard Erlang indentation settings such as
+`erlang-indent-level`, `erlang-indent-guard`, `erlang-argument-indent`,
+`indent-tabs-mode` and `tab-width` still apply. No transpiler process is needed
+for indentation or navigation. Incomplete input is handled on a best-effort
+basis, retaining indentation when the parent parser cannot determine it.
+
+| Editing command | Binding |
+| --- | --- |
+| Indent line / region | `TAB` / `C-M-\` |
+| Newline and indent | `RET` |
+| Beginning / end of function | `C-M-a` / `C-M-e` |
+| Beginning / end of clause | `C-c M-a` / `C-c M-e` |
+| Select clause | `C-c M-h` |
+| Indent current function | `C-c C-q` |
+| Function name/arity index | `M-x imenu` |
+
+Function navigation stops at the function head, leaving preceding `_export`
+and `-spec` text before it. Imenu groups all clauses of a function into one
+entry and counts arguments after masking inline annotations. Its markers
+refer to the original source buffer, including for quoted function names.
+Macros are not expanded, so macro-generated or incomplete heads may not have
+index entries. Erlang's electric punctuation auto-newline/clause-generation
+features are disabled locally because they call its original parser directly;
+punctuation inserts normally, bit-syntax pairing is retained, and `TAB`/`RET`
+provide Angler-aware indentation. Ordinary Erlang-mode buffers are unaffected.
+
 
 Ensure the Erlang distribution's `erlang.el` is on Emacs's `load-path`. If your
 installation has not configured this already, add its `lib/tools-VERSION/emacs`
@@ -685,7 +716,7 @@ Benchmark scanner, rewriting, emitter, total time, and startup cost on modules o
 4. [x] **Function types (implemented):** inline annotations and multi-clause overloaded `-spec` generation.
 5. [x] **Records (implemented):** local annotations, field access, updates, and limited local record-name deduction, including in snippet mode.
 6. [x] **Build mirroring (implemented):** recursive synchronization, arbitrary-file copying, timestamps, collision detection, default warnings for extras, opt-in `-d`/`--delete`, force regeneration with `--clean`, and `--warnings-as-errors`.
-7. [ ] **Emacs support:** an `angler-mode` major mode derived from the Erlang distribution's `erlang-mode`, with `.erlx` association, highlighting, indentation and navigation for extended syntax; source-preserving transpile/copy/send commands and compilation integration, covered by ERT tests. Mode setup (inheritance, `.erlx` association, hooks, and buffer-local customization), syntax highlighting, and `angler-copy-snippet` are implemented and tested. Angler-specific indentation/navigation, additional commands, and direct shell sending remain planned.
+7. [ ] **Emacs support:** an `angler-mode` major mode derived from the Erlang distribution's `erlang-mode`, with `.erlx` association, highlighting, indentation and navigation for extended syntax; source-preserving transpile/copy/send commands and compilation integration, covered by ERT tests. Mode setup, syntax highlighting, indentation, function/clause navigation, Imenu, and `angler-copy-snippet` are implemented and tested. Additional transpile/build commands and direct shell sending remain planned.
 8. [ ] **Eqwalizer option:** checked local annotations behind an explicit flag.
 9. [ ] **Integration:** golden tests, compilation tests, diagnostics, optional Rebar3 hook, documentation, and benchmarks.
 
