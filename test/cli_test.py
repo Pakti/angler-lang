@@ -132,6 +132,17 @@ class CliTests(unittest.TestCase):
         self.assertEqual(result.stdout, b"")
         self.assertIn(b"conflicting annotation", result.stderr)
 
+    def test_record_deduction(self):
+        source = b'P=#person{name="Ada"}, Older=P#person{age=42}, Alias=Older, Alias.name.'
+        result = run("snippet", data=source)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn(b"Alias#person.name", result.stdout)
+        self.assertNotIn(b"-spec", result.stdout)
+        result = run("snippet", data=b"P=#person{}, P=#address{}.")
+        self.assertEqual(result.returncode, 1)
+        self.assertEqual(result.stdout, b"")
+        self.assertIn(b"conflicting annotation", result.stderr)
+
     def test_unicode_file(self):
         with tempfile.TemporaryDirectory() as directory:
             path = pathlib.Path(directory) / "café.erlx"
