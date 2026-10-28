@@ -1,4 +1,10 @@
 %% Four functions, two export groups, and ordinary Erlang underneath.
+%% After `make`, from the project root:
+%%   mkdir -p _build/example
+%%   bin/angler transpile example/example.erlx > _build/example/example.erl
+%%   erlc -Werror -o _build/example _build/example/example.erl
+%%   erl -noshell -pa _build/example -eval 'P = example:new(), {person, "Ada", 43} = example:birthday(P), <<"42">> = example:encode(42), P = example:identity(P), halt().'
+%% Optionally format the output: `rebar3 fmt -w _build/example/example.erl`.
 -module(example).
 -record(person, {name, age}).
 
