@@ -1,63 +1,26 @@
-%% A small gen_server showcasing Angler syntax.
-%% After `make`, from the project root:
-%%   mkdir -p _build/example
-%%   bin/angler transpile example/example.erlx > _build/example/example.erl
-%%   erlc -Werror -o _build/example _build/example/example.erl
-%%   erl -noshell -pa _build/example -eval '{ok, _} = example:start(), ok = example:stop(), halt().'
-%% Optionally format the output: rebar3 fmt -w _build/example/example.erl
-
+%% Four functions, two export groups, and ordinary Erlang underneath.
 -module(example).
--behaviour(gen_server).
+-record(person, {name, age}).
 
--record(address, {city}).
--record(person, {name, age, address}).
+_export(people) % Groups new/0 and birthday/1 under %% people.
+new() -> % No annotations: no -spec is generated.
+    P = #person{name = "Ada", age = 41}, % Deduces P's record type.
+    Alias = P, % Aliases inherit that type.
+    Older :: #person{} = birthday(Alias), % Function results need a local hint; erased in output.
+    42 = Older.age, % Becomes Older#person.age.
+    Older.
 
-%% Standard exports remain valid; gen_server also requires this callback.
--export([handle_cast/2]).
+_export(people)
+birthday(P :: #person{}) :: #person{} -> % Emits -spec birthday(#person{}) -> #person{}.
+    P{age = P.age + 1}. % Becomes P#person{age = P#person.age + 1}.
 
-_export(api) % Adds start/0 to the export group labeled %% api.
-start() -> % No type annotations: no -spec is generated.
-    gen_server:start_link({local, ?MODULE}, ?MODULE, [], []).
-
-_export(api) % Adds stop/0 to the same export group.
-stop() ->
-    %% Function results need an explicit local record annotation, erased in output.
-    P :: #person{} = gen_server:call(?MODULE, birthday),
-    Alias = P, % Aliases inherit the known record name.
-    42 = Alias.age, % Becomes Alias#person.age.
-    "Rome" = city(P),
-    <<"42">> = encode(42),
-    <<"hello">> = encode(<<"hello">>),
-    gen_server:stop(?MODULE).
-
-_export(gen_server) % Adds init/1 to the export group labeled %% gen_server.
-init(Args) ->
-    [] = Args,
-    P = #person{ % Direct construction establishes P's record name.
-        name = "Ada",
-        age = 41,
-        address = #address{city = "Rome"}
-    },
-    {ok, P}.
-
-_export(gen_server) % Adds handle_call/3 to the same export group.
-%% Emits -spec handle_call(any(), any(), #person{}) -> any().
-%% Only State needs a type for record shorthand; other types default to any().
-handle_call(Request, _From, State :: #person{}) ->
-    birthday = Request,
-    Next = State{age = State.age + 1}, % Becomes State#person{age = State#person.age + 1}.
-    {reply, Next, Next}.
-
-handle_cast(_Request, State) ->
-    {noreply, State}.
-
-city(P :: #person{}) :: string() -> % Emits -spec city(#person{}) -> string().
-    A :: #address{} = P.address, % Field values need an explicit record annotation.
-    A.city.
-
-%% Emits one overloaded spec for both clauses:
-%% -spec encode(integer()) -> binary(); (binary()) -> binary().
+_export(values) % Groups encode/1 and identity/1 under %% values.
+%% Emits one overloaded spec: -spec encode(integer()) -> binary(); (binary()) -> binary().
 encode(N :: integer()) :: binary() when is_integer(N) ->
     integer_to_binary(N);
 encode(B :: binary()) :: binary() when is_binary(B) ->
     B.
+
+_export(values)
+identity(Value) -> % Unannotated arguments and return: no -spec is generated.
+    Value.
