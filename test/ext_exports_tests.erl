@@ -154,3 +154,31 @@ compile_and_run(Source, Options, Check) ->
 transpile(Source) ->
     {ok, Output} = angler:transpile(Source),
     Output.
+
+tagged_groups_test() ->
+    Source = "-module(m).\n_export(api) f(X :: integer()) :: integer() -> X.\n"
+             "_export(gen_server) g()->ok.\n_export(api) h()->ok.\n_export i()->ok.\n",
+    Output = transpile(Source),
+    ?assert(string:str(Output, "%% api\n-export([f/1,h/0]).") > 0),
+    ?assert(string:str(Output, "%% gen_server\n-export([g/0]).") > 0),
+    ?assert(string:str(Output, "-export([i/0]).") > 0),
+    ?assert(string:str(Output, "-spec") > 0),
+    ?assertEqual(0, string:str(Output, "_export")).
+
+tagged_dedup_test() ->
+    Output = transpile("-module(m). -export([f/0]). _export(api) f()->ok."),
+    ?assertEqual("-module(m). -export([f/0]).  f()->ok.", Output).
+
+invalid_tags_test_() ->
+    [?_assertMatch({error, {_, ext_exports, _}}, angler:transpile(Source)) || Source <- [
+        "_export(api, other) f()->ok.",
+        "_export(Tag) f()->ok.",
+        "_export() f()->ok.",
+        "_export(api) _export(other) f()->ok.",
+        "_export(api) -spec f()->ok. f()->ok."
+    ]].
+
+tagged_comments_test() ->
+    Output = transpile("-module(m).\n_export('public api') % retained\n% between\nf()->ok."),
+    ?assert(string:str(Output, "%% 'public api'\n-export([f/0]).") > 0),
+    ?assert(string:str(Output, "% retained\n% between") > 0).

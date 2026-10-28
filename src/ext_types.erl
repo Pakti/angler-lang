@@ -9,12 +9,19 @@ rewrite(Document) ->
         {Edits, Warnings} = lists:foldl(fun(F, Acc) -> rewrite_function(F, Explicit, Acc) end,
                                       {#{}, []}, Functions),
         {ok, ext_syntax:apply(Document, Edits), lists:reverse(Warnings)}
-    catch throw:{syntax_error, Location, Reason} -> {error, {Location, ?MODULE, Reason}} end.
+    catch
+        throw:{syntax_error, Location, Reason} -> {error, {Location, ?MODULE, Reason}};
+        throw:{export_error, Location, Reason} -> {error, {Location, ext_exports, Reason}}
+    end.
 
 functions(Document) -> functions(Document, false).
 functions(Document, OnlyAnnotated) ->
     lists:filtermap(fun(Form) ->
-        Bare = case Form of [{_, {var, _, '_export'}} | Rest] -> Rest; _ -> Form end,
+        Bare = case ext_exports:directive(Form) of
+            {ok, _, _, Rest} -> Rest;
+            none -> Form;
+            {error, {Location, ext_exports, Reason}} -> throw({export_error, Location, Reason})
+        end,
         case Bare of
             [{_, {atom, _, Name}}, {_, {'(', _}} | _] ->
                 Clauses = [clause(C) || C <- ext_syntax:clauses(Bare)],

@@ -135,4 +135,4 @@ help() -> output(
     "Warnings still display and successful output remains, but exit status becomes 1.\n"
     "build also accepts --encoding utf8|latin1 for .erlx files (UTF-8 by default).\n"
     "transpile writes one file to stdout; snippet reads expressions from stdin.\n"
-    "Diagnostics go to stderr. Eqwalizer and export tags are not implemented yet.\n").
+    "Diagnostics go to stderr. Eqwalizer is not implemented yet.\n").

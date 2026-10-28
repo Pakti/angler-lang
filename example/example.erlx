@@ -1,0 +1,27 @@
+%% Example with extended syntax.
+
+-module(example).
+-record(person, {name, age}).
+
+_export(people) % Adds `new/0` to the generated `-export` under the comment `%% people`.
+new() -> % No annotations: no `-spec` is generated.
+    P = #person{name = "Ada", age = 41}, % Deduces `P`'s record type.
+    Alias = P, % Aliases inherit that type.
+    Older :: #person{} = birthday(Alias), % Function results need a local hint; erased in output.
+    42 = Older.age, % Becomes `Older#person.age`.
+    Older.
+
+_export(people) % Adds `birthday/1` to the generated `-export` under the comment `%% people`.
+birthday(P :: #person{}) :: #person{} -> % Emits `-spec birthday(#person{}) -> #person{}.`
+    P{age = P.age + 1}. % Becomes `P#person{age = P#person.age + 1}`.
+
+_export(values) % Adds `encode/1` to the generated `-export` under the comment `%% values`.
+%% Emits one overloaded spec: `-spec encode(integer()) -> binary(); (binary()) -> binary().`
+encode(N :: integer()) :: binary() when is_integer(N) ->
+    integer_to_binary(N);
+encode(B :: binary()) :: binary() when is_binary(B) ->
+    B.
+
+_export(values) % Adds `identity/1` to the generated `-export` under the comment `%% values`.
+identity(Value) -> % Unannotated arguments and return: no `-spec` is generated.
+    Value.

@@ -2,9 +2,9 @@
 
 Angler is a proposed lightweight, conservative syntax extension for Erlang. It transpiles extended source into ordinary Erlang without introducing a new runtime or type checker.
 
-> Status: milestones 1–6 implemented: lossless scanner/emitter, local exports,
-> Snippet and CLI, Function types, Records, and Build mirroring. Eqwalizer and
-> the remaining integration work are planned.
+> Status: milestones 1–7 implemented: lossless scanner/emitter, local exports,
+> Snippet and CLI, Function types, Records, Build mirroring, and Emacs support.
+> Eqwalizer and the remaining integration work are planned.
 
 ## Developing the prototype
 
@@ -242,7 +242,7 @@ special meaning is restricted to the beginning of a top-level form. Only
 comments and whitespace may occur between the directive and its function;
 intervening module attributes, including `-spec`, are errors.
 
-#### Optional export tags (agreed design; not implemented yet)
+#### Optional export tags
 
 A directive may optionally carry a **single atom tag**, in parentheses:
 
@@ -277,8 +277,6 @@ The untagged group has no tag label. Existing standard export attributes remain
 intact, and entries already exported are not duplicated by generated groups.
 Generated comments may add lines; output can be normalized with erlfmt.
 Source-line preservation is not a requirement for transformed extended syntax.
-The current implementation supports only plain `_export`; tagged syntax is a
-planned extension to the completed Exports milestone.
 
 ### Record fields and updates
 
@@ -569,7 +567,7 @@ Build accepts `--input DIR` and `--output DIR` (defaults: `src_ex` and `src`),
 `--clean`, `-d`/`--delete`, and `--encoding utf8|latin1` for extended source.
 Ordinary files, including `.erl`, are copied without decoding. All three source
 commands (`build`, `transpile`, `snippet`) accept `--warnings-as-errors`.
-Export tags and Eqwalizer remain unimplemented.
+Eqwalizer remains unimplemented.
 
 ```sh
 angler build
@@ -587,19 +585,121 @@ the library returns warnings for the caller to handle.
 
 ### Emacs integration
 
-Load the supplied helper alongside Erlang mode, using your checkout's path:
+`angler-mode` is a major mode derived from the Erlang distribution's
+`erlang-mode`. The initial mode setup associates `.erlx` files, inherits
+Erlang's keymap, syntax table, indentation and navigation, and runs
+`erlang-mode-hook` followed by `angler-mode-hook`. Angler-aware indentation,
+function/clause movement and Imenu are implemented.
+
+Syntax-aware highlighting recognizes top-level `_export`, inline/local type
+annotations, and abbreviated record access/updates, including multiline types.
+Comments, strings, quoted literals and ordinary Erlang syntax retain inherited
+highlighting. Highlighting is lexical and does not infer record types or
+validate the code. It also tolerates incomplete syntax while editing.
+Customize `angler-directive-face`, `angler-operator-face` and
+`angler-field-face` to adjust the appearance; type text uses the standard
+`font-lock-type-face` alongside inherited Erlang builtin/literal faces.
+
+Indentation uses a temporary, same-width Erlang parser view with annotations
+and shorthand masked out; it applies only leading-whitespace changes to the
+source. It handles typed heads, guards, multiple clauses, local annotations,
+record shorthand and multiline type continuations, while preserving literal
+string contents. Standard Erlang indentation settings such as
+`erlang-indent-level`, `erlang-indent-guard`, `erlang-argument-indent`,
+`indent-tabs-mode` and `tab-width` still apply. No transpiler process is needed
+for indentation or navigation. Incomplete input is handled on a best-effort
+basis, retaining indentation when the parent parser cannot determine it.
+
+| Editing command | Binding |
+| --- | --- |
+| Indent line / region | `TAB` / `C-M-\` |
+| Newline and indent | `RET` |
+| Beginning / end of function | `C-M-a` / `C-M-e` |
+| Beginning / end of clause | `C-c M-a` / `C-c M-e` |
+| Select clause | `C-c M-h` |
+| Indent current function | `C-c C-q` |
+| Function name/arity index | `M-x imenu` |
+| Copy transpiled expression region | `C-c C-r` (`angler-copy-snippet`) |
+| Send transpiled expression region | `C-c C-e` (`angler-send-snippet`) |
+| Transpile entire buffer | `C-c C-t` (`angler-transpile-buffer`) |
+| Build project output tree | `C-c C-k` (`angler-build`) |
+
+Function navigation stops at the function head, leaving preceding `_export`
+and `-spec` text before it. Imenu groups all clauses of a function into one
+entry and counts arguments after masking inline annotations. Its markers
+refer to the original source buffer, including for quoted function names.
+Macros are not expanded, so macro-generated or incomplete heads may not have
+index entries. Erlang's electric punctuation auto-newline/clause-generation
+features are disabled locally because they call its original parser directly;
+punctuation inserts normally, bit-syntax pairing is retained, and `TAB`/`RET`
+provide Angler-aware indentation. Ordinary Erlang-mode buffers are unaffected.
+
+
+Ensure the Erlang distribution's `erlang.el` is on Emacs's `load-path`. If your
+installation has not configured this already, add its `lib/tools-VERSION/emacs`
+directory (or your distribution's Erlang-mode package directory). Then load
+Angler using your checkout's path:
 
 ```elisp
+;; Only needed if erlang.el is not already on load-path:
+(add-to-list 'load-path "/path/to/otp/lib/tools-VERSION/emacs")
 (load-file "/path/to/angler-lang/emacs/angler.el")
 (setq angler-program "/path/to/angler-lang/bin/angler")
 ```
 
-Select an expression sequence and run `M-x angler-copy-snippet`. It invokes
-`angler snippet` using UTF-8, copies successful output to the kill ring, and
-leaves the source buffer unchanged. Paste the result into an Erlang shell.
-Failures display `*Angler diagnostics*` and leave the kill ring unchanged.
-Build with `make` first and ensure `erl` is available to Emacs through `PATH`.
-A future command may send the output directly to the running Erlang shell.
+New `.erlx` buffers select `angler-mode` automatically. For an already open
+buffer, use `M-x angler-mode`. The mode leaves ordinary `.erl` associations and
+the source buffer contents unchanged. Customize Angler-specific settings in
+`angler-mode-hook`; existing `erlang-mode-hook` customization still applies.
+The copy helper can also be used without enabling the major mode.
+
+Select an expression sequence and run `M-x angler-copy-snippet` to copy the
+transpiled output to the kill ring, or `M-x angler-send-snippet` to send it to a
+live Erlang shell. Both commands accept expressions, not module attributes or
+function definitions, and use UTF-8 when communicating with the CLI.
+
+Start a shell with `M-x erlang-shell` first. Sending chooses the sole live Erlang
+shell automatically, prompts if several exist, or uses `angler-shell-buffer`
+when configured. `C-u C-c C-e` explicitly chooses a shell. Pending shell input
+must be finished or cleared first; the command does not overwrite it or start
+a shell implicitly. Shell variables and record definitions must already exist
+as needed. Sending uses comint input/history; it leaves the source and kill
+ring unchanged, and sends nothing when transpilation fails.
+
+`M-x angler-transpile-buffer` reads the entire current buffer, including unsaved
+edits, without saving it. Successful output goes into a separate read-only
+Erlang buffer named `*Angler transpilation: SOURCE*`; source encoding metadata
+is retained for saving that output later. Failure leaves previous successful
+output intact. Use this command for module text and function definitions.
+
+Source-command diagnostics appear in `*Angler diagnostics*`. For file-backed
+source buffers, snippet-relative positions are adjusted to the original region,
+and `next-error` (`M-g n`) visits the source buffer. Diagnostics for buffers
+without filenames are displayed as text with buffer-relative positions.
+Warnings are displayed even on success. Setting `angler-warnings-as-errors`
+makes nonzero warning outcomes fail without replacing the kill ring or sending
+code to a shell.
+
+`M-x angler-build` runs an asynchronous `angler build` in
+`angler-compilation-mode`, with clickable source diagnostics and normal
+`next-error` navigation. It generates the output tree; it does not compile
+the generated Erlang into BEAM files. Builds read files on disk and do not
+save buffers: save edits first. Root discovery prefers a containing `src_ex`
+project, then Emacs's project root, a containing `rebar.config`, or the current
+directory. Set `angler-project-root` or use `C-u C-c C-k` to choose explicitly.
+`angler-build-arguments` supplies additional CLI arguments, such as `--input`,
+`--output`, `--clean` or `--delete`; every argument is shell quoted. No cleanup
+or deletion option is added automatically. Build failures retain whatever
+filesystem changes the CLI already completed, as described in Build mirroring.
+
+Build Angler with Make or Rebar3 first and ensure `erl` is available to Emacs
+through `PATH`. Use an absolute `angler-program` path or an executable on
+`PATH`, since project builds run from the project root. Settings may be made
+buffer-local in `angler-mode-hook` for different projects.
+
+`make test-emacs` discovers the parent mode under Erlang's tools application.
+If it is installed elsewhere, set `ERLANG_EMACS_DIR=/path/to/erlang-mode` when
+running the target. `EMACS=/path/to/emacs` selects the Emacs executable.
 
 A Rebar3 pre-compile hook can run `angler build`; Rebar3 integration is optional rather than a required part of the transpiler.
 
@@ -650,13 +750,14 @@ Benchmark scanner, rewriting, emitter, total time, and startup cost on modules o
 ## Development milestones
 
 1. [x] **Lossless round-trip (implemented):** scanner and emitter; byte-for-byte preservation with documented encoding boundaries.
-2. [x] **Exports (implemented):** plain `_export` and generated export attributes. Optional tagged groups are an agreed, pending enhancement.
+2. [x] **Exports (implemented):** plain and tagged `_export` directives and generated export groups.
 3. [x] **Snippet and CLI (implemented):** stdin/stdout expression validation and preservation, single-file transpilation, and basic Emacs Erlang-mode integration. Originally moved ahead of types and records; record snippet rewriting is now implemented.
 4. [x] **Function types (implemented):** inline annotations and multi-clause overloaded `-spec` generation.
 5. [x] **Records (implemented):** local annotations, field access, updates, and limited local record-name deduction, including in snippet mode.
 6. [x] **Build mirroring (implemented):** recursive synchronization, arbitrary-file copying, timestamps, collision detection, default warnings for extras, opt-in `-d`/`--delete`, force regeneration with `--clean`, and `--warnings-as-errors`.
-7. [ ] **Eqwalizer option:** checked local annotations behind an explicit flag.
-8. [ ] **Integration:** golden tests, compilation tests, diagnostics, optional Rebar3 hook, documentation, and benchmarks.
+7. [x] **Emacs support (implemented):** an `angler-mode` major mode derived from the Erlang distribution's `erlang-mode`, with `.erlx` association, highlighting, indentation and navigation for extended syntax; source-preserving transpile/copy/send commands and compilation integration, covered by ERT tests. Mode setup, syntax highlighting, indentation, function/clause navigation, Imenu, buffer transpilation, copy/send snippet commands and asynchronous project builds are implemented and tested, including a live Erlang-shell smoke test.
+8. [ ] **Eqwalizer option:** checked local annotations behind an explicit flag.
+9. [ ] **Integration:** golden tests, compilation tests, diagnostics, optional Rebar3 hook, documentation, and benchmarks.
 
 ## Open design decisions
 

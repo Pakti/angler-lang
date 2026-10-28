@@ -12,6 +12,8 @@ rewrite(Document, Mode) ->
         {ok, ext_syntax:apply(Document, Edits)}
     catch
         throw:{record_error, Location, Reason} -> {error, {Location, ?MODULE, Reason}};
+        throw:{export_error, Location, Reason} ->
+            {error, {Location, ext_exports, Reason}};
         throw:{syntax_error, Location, Reason} -> {error, {Location, ext_types, Reason}}
     end.
 
