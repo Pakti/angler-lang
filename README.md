@@ -258,6 +258,33 @@ are independent and remain usable with explicit specs. Macro-expanded argument
 patterns cannot establish generated arity; use an explicit spec. Macro types
 and constraints requiring explicit specifications are not implemented.
 
+#### Planned constrained inline types
+
+Constrained inline types are a planned extension, not currently supported.
+Parentheses would separate a type's constraint list from function arguments
+and runtime guards, for example:
+
+```erlang
+make(Tag :: (T when T :: atom()), Value :: V)
+    :: strong(T, V) when is_atom(Tag) ->
+    {Tag, Value}.
+```
+
+The intended output is:
+
+```erlang
+-spec make(T, V) -> strong(T, V) when T :: atom().
+make(Tag, Value) when is_atom(Tag) ->
+    {Tag, Value}.
+```
+
+Angler should preserve repeated constraints on the same type variable as
+written, without simplifying them or trying to detect contradictions. More
+generally, it should avoid extra semantic validation of malformed source and
+leave type errors and contradictions to the Erlang compiler and/or Eqwalizer.
+A quick check of the assembled spec with Erlang's parser is acceptable for
+reporting syntax errors early; this does not imply type checking by Angler.
+
 ### Record shorthand and local annotations
 
 `P.field` and `P{field = Value}` require a known tuple-record name. A direct
