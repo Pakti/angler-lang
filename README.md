@@ -256,12 +256,11 @@ An explicit `-spec` plus **any inline function annotation** for the same
 name/arity is an error, even for identical types or `any()`. Local annotations
 are independent and remain usable with explicit specs. Macro-expanded argument
 patterns cannot establish generated arity; use an explicit spec. Macro types
-and constraints requiring explicit specifications are not implemented.
+are not implemented.
 
-#### Planned constrained inline types
+#### Constrained inline types
 
-Constrained inline types are a planned extension, not currently supported.
-Parentheses would separate a type's constraint list from function arguments
+Parentheses separate a type's constraint list from function arguments
 and runtime guards, for example:
 
 ```erlang
@@ -270,7 +269,7 @@ make(Tag :: (T when T :: atom()), Value :: V)
     {Tag, Value}.
 ```
 
-The intended output is:
+The output is:
 
 ```erlang
 -spec make(T, V) -> strong(T, V) when T :: atom().
@@ -278,12 +277,18 @@ make(Tag, Value) when is_atom(Tag) ->
     {Tag, Value}.
 ```
 
-Angler should preserve repeated constraints on the same type variable as
-written, without simplifying them or trying to detect contradictions. More
-generally, it should avoid extra semantic validation of malformed source and
-leave type errors and contradictions to the Erlang compiler and/or Eqwalizer.
-A quick check of the assembled spec with Erlang's parser is acceptable for
-reporting syntax errors early; this does not imply type checking by Angler.
+Angler preserves repeated constraints on the same type variable as
+written, without simplifying them or trying to detect contradictions. It leaves
+type errors and contradictions to the Erlang compiler and/or Eqwalizer.
+The assembled spec is checked with Erlang's parser to report syntax errors
+early; this does not imply type checking by Angler.
+
+Constrained annotations are supported on function arguments and return types,
+not local variable annotations. Constraints from arguments (left to right) and
+the return annotation are collected into that clause's spec alternative. Each
+overloaded alternative keeps its own constraints. Multiple constraints inside
+one annotation are separated by commas; parentheses are required. An explicit
+`-spec` still conflicts with inline function annotations.
 
 ### Record shorthand and local annotations
 

@@ -55,3 +55,53 @@ trivia_test() ->
     {ok, Out} = angler:transpile(S),
     ?assertMatch(<<239,187,191,_/binary>>, Out),
     ?assertNotEqual(nomatch, binary:match(Out, <<"% type comment\r\n">>)).
+
+constrained_compile_test() ->
+    Source = "-module(constrained_fixture).\n"
+             "-export([make/2, empty/0, choose/1]).\n"
+             "-type strong(T, V) :: {T, V}.\n"
+             "make(Tag :: (T when T :: atom()), Value :: V)\n"
+             " :: (strong(T, V) when V :: integer()) when is_atom(Tag) -> {Tag, Value}.\n"
+             "empty() :: (list(T) when T :: atom()) -> [].\n"
+             "choose(X :: (T when T :: atom())) :: T when is_atom(X) -> X;\n"
+             "choose(X :: (T when T :: integer())) :: T -> X.\n",
+    {ok, Output, []} = angler:transpile_with_warnings(Source, utf8),
+    ?assertEqual({ok, Output}, angler:transpile(Output)),
+    Path = "_build/test/constrained_fixture.erl",
+    ok = file:write_file(Path, Output),
+    try
+        {ok, constrained_fixture, Beam, []} = compile:file(Path,
+            [binary, return_errors, return_warnings, warnings_as_errors]),
+        {module, constrained_fixture} = code:load_binary(constrained_fixture, Path, Beam),
+        ?assertEqual({tag, 42}, constrained_fixture:make(tag, 42)),
+        ?assertEqual([], constrained_fixture:empty()),
+        ?assertEqual(tag, constrained_fixture:choose(tag)),
+        ?assertEqual(42, constrained_fixture:choose(42))
+    after code:purge(constrained_fixture), code:delete(constrained_fixture), file:delete(Path) end.
+
+repeated_constraints_test() ->
+    {ok, Output} = angler:transpile(
+        "f(X :: (T when T :: atom(), T :: integer()), Y :: (U when U :: atom()))"
+        " :: (T when T :: binary()) -> X."),
+    {ok, Tokens, _} = erl_scan:string(Output),
+    {SpecTokens, _} = lists:splitwith(fun(T) -> erl_scan:category(T) =/= dot end, Tokens),
+    Dot = lists:nth(length(SpecTokens) + 1, Tokens),
+    {ok, {attribute, _, spec, {{f, 2}, [{type, _, bounded_fun, [_, Constraints]}]}}} =
+        erl_parse:parse_form(SpecTokens ++ [Dot]),
+    %% Preserve all constraints, including contradictions, in source order.
+    ?assertMatch([
+        {type, _, constraint, [_, [{var, _, 'T'}, {type, _, atom, []}]]},
+        {type, _, constraint, [_, [{var, _, 'T'}, {type, _, integer, []}]]},
+        {type, _, constraint, [_, [{var, _, 'U'}, {type, _, atom, []}]]},
+        {type, _, constraint, [_, [{var, _, 'T'}, {type, _, binary, []}]]}
+    ], Constraints).
+
+invalid_constraints_test_() ->
+    [?_assertMatch({error, _}, angler:transpile(S)) || S <- [
+        "f(X :: (T when)) -> X.",
+        "f(X :: (T when T ::)) -> X.",
+        "f(X :: (T when T :: atom(),)) -> X.",
+        "f(X :: T when T :: atom()) -> X.",
+        "f(X) :: T when T :: atom() -> X.",
+        "-spec f(T)->T when T :: atom(). f(X :: (T when T :: atom())) -> X.",
+        "f() -> X :: (T when T :: atom()) = tag, X."]].

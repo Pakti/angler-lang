@@ -50,7 +50,7 @@ clause([{_, {atom, _, Name}}, {_, {'(', _}} | Rest] = Entries) ->
                     {Return, Guard} = ext_syntax:take(BeforeArrow, 'when'),
                     Ret = case Return of
                         [] -> none;
-                        [{_, {'::', _}} = Colon | Type] -> annotation(Colon, Type);
+                        [{_, {'::', _}} = Colon | Type] -> signature_annotation(Colon, Type);
                         _ -> ext_syntax:error(hd(Return), invalid_return_annotation)
                     end,
                     #{name => Name, args => Args, return => Ret, guard => Guard,
@@ -68,11 +68,26 @@ argument(Entries) ->
         [Colon | Type] ->
             %% V1 deliberately limits annotated patterns to simple variables.
             case Pattern of
-                [{_, {var, _, _}}] -> annotation(Colon, Type);
+                [{_, {var, _, _}}] -> signature_annotation(Colon, Type);
                 _ -> ext_syntax:error(Colon, unsupported_pattern)
             end
     end,
     #{pattern => Pattern, annotation => Ann}.
+
+%% Constraints are scoped to one generated spec alternative, not to an
+%% individual argument. Only signature annotations accept this extension.
+signature_annotation(Colon, [{_, {'(', _}} | Rest] = Type) ->
+    case ext_syntax:take(Rest, ')') of
+        {Inner, [{_, {')', _}}]} ->
+            case ext_syntax:take(Inner, 'when') of
+                {Base, [_When | Constraints]} ->
+                    A = annotation(Colon, Base),
+                    A#{remove := [Colon | Type], constraints => ext_syntax:text(Constraints)};
+                _ -> annotation(Colon, Type)
+            end;
+        _ -> annotation(Colon, Type)
+    end;
+signature_annotation(Colon, Type) -> annotation(Colon, Type).
 
 annotation(Colon, []) -> ext_syntax:error(Colon, empty_type);
 annotation(Colon, Type) ->
@@ -121,7 +136,7 @@ rewrite_function(#{key := Key, clauses := Clauses, start := Start}, Explicit, {E
                 end, maps:get(args, C))
             end, Clauses),
             Clean = lists:foldl(fun(A, Acc) -> ext_syntax:remove(maps:get(remove, A), Acc) end, Edits, Annotations),
-            HasTypes = lists:any(fun(A) -> not is_any(A) end, Annotations),
+            HasTypes = lists:any(fun(A) -> not is_any(A) orelse maps:is_key(constraints, A) end, Annotations),
             case HasTypes of
                 false -> {Clean, Warnings};
                 true ->
@@ -131,6 +146,12 @@ rewrite_function(#{key := Key, clauses := Clauses, start := Start}, Explicit, {E
                             [["; ", S] || S <- Others], ". "],
                     {I, T} = Start,
                     Generated = ext_syntax:generated(Spec, erl_scan:location(T)),
+                    case erl_parse:parse_form([Token || Token <- Generated,
+                            erl_scan:category(Token) =/= white_space,
+                            erl_scan:category(Token) =/= comment]) of
+                        {ok, _} -> ok;
+                        {error, _} -> ext_syntax:error(hd(maps:get(remove, First)), invalid_spec)
+                    end,
                     New = Clean#{I => Generated ++ maps:get(I, Clean, [T])},
                     Partial = length(Clauses) > 1 andalso lists:any(fun incomplete/1, Clauses),
                     Warn = case Partial of
@@ -148,7 +169,12 @@ is_any(_) -> false.
 type_text(none) -> "any()";
 type_text(#{text := Text}) -> Text.
 signature(C) -> ["(", lists:join(", ", [type_text(maps:get(annotation, A)) || A <- maps:get(args, C)]),
-                 ") -> ", type_text(maps:get(return, C))].
+                 ") -> ", type_text(maps:get(return, C)), constraints(C)].
+constraints(C) ->
+    case [Text || A <- annotations(C), {ok, Text} <- [maps:find(constraints, A)]] of
+        [] -> [];
+        Constraints -> [" when ", lists:join(", ", Constraints)]
+    end.
 incomplete(C) -> maps:get(return, C) =:= none orelse
     lists:any(fun(A) -> maps:get(annotation, A) =:= none end, maps:get(args, C)).
 
@@ -158,6 +184,7 @@ format_error({partial_overload, {Name, Arity}}) ->
     io_lib:format("~tp/~B has a partially annotated overload; any() fallbacks may overlap; use an explicit spec for precise contracts", [Name, Arity]);
 format_error(macro_argument) -> "macro-expanded argument patterns cannot determine a generated spec arity; use an explicit spec";
 format_error(unsupported_pattern) -> "only simple variable patterns may carry inline argument annotations";
+format_error(invalid_spec) -> "invalid generated Erlang spec (check inline type constraints)";
 format_error(invalid_type) -> "invalid or unsupported Erlang type annotation (macros are not expanded)";
 format_error(empty_type) -> "expected a type after ::";
 format_error(invalid_return_annotation) -> "expected :: Type or a guard after function arguments";
