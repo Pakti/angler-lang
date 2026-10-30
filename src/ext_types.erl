@@ -68,11 +68,19 @@ argument(Entries) ->
         [Colon | Type] ->
             %% V1 deliberately limits annotated patterns to simple variables.
             case Pattern of
-                [{_, {var, _, _}}] -> signature_annotation(Colon, Type);
+                [{_, {var, _, _}}] -> argument_annotation(Colon, Type);
                 _ -> ext_syntax:error(Colon, unsupported_pattern)
             end
     end,
     #{pattern => Pattern, annotation => Ann}.
+
+%% At argument level commas have already separated arguments, so an
+%% unparenthesized annotation can carry exactly one constraint.
+argument_annotation(Colon, Type) ->
+    case ext_syntax:take(Type, 'when') of
+        {Base, [_When | Constraints]} -> constrained_annotation(Colon, Type, Base, Constraints);
+        _ -> signature_annotation(Colon, Type)
+    end.
 
 %% Constraints are scoped to one generated spec alternative, not to an
 %% individual argument. Only signature annotations accept this extension.
@@ -81,13 +89,16 @@ signature_annotation(Colon, [{_, {'(', _}} | Rest] = Type) ->
         {Inner, [{_, {')', _}}]} ->
             case ext_syntax:take(Inner, 'when') of
                 {Base, [_When | Constraints]} ->
-                    A = annotation(Colon, Base),
-                    A#{remove := [Colon | Type], constraints => ext_syntax:text(Constraints)};
+                    constrained_annotation(Colon, Type, Base, Constraints);
                 _ -> annotation(Colon, Type)
             end;
         _ -> annotation(Colon, Type)
     end;
 signature_annotation(Colon, Type) -> annotation(Colon, Type).
+
+constrained_annotation(Colon, Type, Base, Constraints) ->
+    A = annotation(Colon, Base),
+    A#{remove := [Colon | Type], constraints => ext_syntax:text(Constraints)}.
 
 annotation(Colon, []) -> ext_syntax:error(Colon, empty_type);
 annotation(Colon, Type) ->

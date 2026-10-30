@@ -60,7 +60,7 @@ constrained_compile_test() ->
     Source = "-module(constrained_fixture).\n"
              "-export([make/2, empty/0, choose/1]).\n"
              "-type strong(T, V) :: {T, V}.\n"
-             "make(Tag :: (T when T :: atom()), Value :: V)\n"
+             "make(Tag :: T when T :: atom(), Value :: V)\n"
              " :: (strong(T, V) when V :: integer()) when is_atom(Tag) -> {Tag, Value}.\n"
              "empty() :: (list(T) when T :: atom()) -> [].\n"
              "choose(X :: (T when T :: atom())) :: T when is_atom(X) -> X;\n"
@@ -101,7 +101,27 @@ invalid_constraints_test_() ->
         "f(X :: (T when)) -> X.",
         "f(X :: (T when T ::)) -> X.",
         "f(X :: (T when T :: atom(),)) -> X.",
-        "f(X :: T when T :: atom()) -> X.",
+        "f(X :: T when) -> X.",
+        "f(X :: T when T ::) -> X.",
         "f(X) :: T when T :: atom() -> X.",
         "-spec f(T)->T when T :: atom(). f(X :: (T when T :: atom())) -> X.",
         "f() -> X :: (T when T :: atom()) = tag, X."]].
+
+argument_constraint_shorthand_test_() ->
+    [?_test(begin
+        {ok, Expected} = angler:transpile(Parenthesized),
+        ?assertEqual({ok, Expected}, angler:transpile(Shorthand))
+    end) || {Parenthesized, Shorthand} <- [
+        {"f(X :: (T when T :: atom()), Y :: U) :: T -> X.",
+         "f(X :: T when T :: atom(), Y :: U) :: T -> X."},
+        {"f(X :: (T when T :: atom()), T :: integer()) -> X.",
+         "f(X :: T when T :: atom(), T :: integer()) -> X."},
+        {"f(X :: (T when T :: tuple()), {A,B}) :: T -> X.",
+         "f(X :: T when T :: tuple(), {A,B}) :: T -> X."},
+        {"f(X :: (T when T :: {atom(), integer()})) :: T -> X.",
+         "f(X :: T when T :: {atom(), integer()}) :: T -> X."},
+        {"f(X :: (T when T :: atom()), Y :: (U when U :: integer()))"
+         " :: (T when T :: atom()) when is_atom(X) -> X.",
+         "f(X :: T when T :: atom(), Y :: U when U :: integer())"
+         " :: (T when T :: atom()) when is_atom(X) -> X."}
+    ]].

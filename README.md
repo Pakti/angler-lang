@@ -287,8 +287,19 @@ Constrained annotations are supported on function arguments and return types,
 not local variable annotations. Constraints from arguments (left to right) and
 the return annotation are collected into that clause's spec alternative. Each
 overloaded alternative keeps its own constraints. Multiple constraints inside
-one annotation are separated by commas; parentheses are required. An explicit
-`-spec` still conflicts with inline function annotations.
+one annotation are separated by commas and require parentheses. For a single
+constraint on an argument, parentheses are optional:
+
+```erlang
+make(Tag :: T when T :: atom(), Value :: V)
+    :: strong(T, V) when is_atom(Tag) ->
+    {Tag, Value}.
+```
+
+Without parentheses, a top-level comma starts the next argument. Constrained
+return annotations always require parentheses to distinguish their constraints
+from runtime guards. An explicit `-spec` still conflicts with inline function
+annotations.
 
 ### Record shorthand and local annotations
 
